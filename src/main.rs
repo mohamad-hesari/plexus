@@ -7,7 +7,9 @@ mod cli;
 mod console;
 mod pnpm;
 mod share;
+mod state;
 mod task;
+mod test;
 mod tui;
 mod watcher;
 
