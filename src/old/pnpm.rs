@@ -42,21 +42,19 @@ pub struct Pnpm {
     _projects: HashMap<String, Project>,
 }
 
-impl Default for Pnpm {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Pnpm {
-    pub fn new() -> Self {
-        Self {
+    pub async fn new(filters: &[String]) -> Result<Self, ()> {
+        let mut pnpm = Self {
             _projects: HashMap::new(),
-        }
+        };
+
+        pnpm.load_projects(filters, 0).await;
+
+        Ok(pnpm)
     }
 
     #[async_recursion::async_recursion]
-    pub async fn load_projects(&mut self, projects: &[String], counter: usize) {
+    async fn load_projects(&mut self, projects: &[String], counter: usize) {
         if counter > 10 {
             eprintln!("Too many recursive calls to load_projects, possible circular dependency");
             return;

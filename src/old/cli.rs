@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -18,34 +18,14 @@ pub struct Cli {
     #[arg(
         short,
         long,
-        default_value = "false",
-        help = "Use TUI interface, if this is true, the watch flag will be set to true also this flag will override the console and web flags"
+        value_enum,
+        default_value = "Tui",
+        help = "The interface to use (e.g. console, tui, web)"
     )]
-    pub tui: bool,
-
-    #[arg(short, long, default_value = "false", help = "Use Console interface")]
-    pub console: bool,
-
-    #[arg(short, long, default_value = "false", help = "Use Web interface")]
-    pub web: bool,
+    pub interface: Interface,
 
     #[arg(short, long, default_value = "false")]
     pub verbose: bool,
-
-    #[arg(
-        long,
-        alias = "log-file",
-        help = "The file to log the output of the tasks to"
-    )]
-    pub log_file: Option<String>,
-
-    #[arg(
-        long,
-        alias = "log-console",
-        help = "Log the output of the tasks to the console",
-        default_value = "false"
-    )]
-    pub log_console: bool,
 
     #[arg(
         short,
@@ -54,15 +34,11 @@ pub struct Cli {
     )]
     pub filter: Vec<String>,
 
-    #[arg(
-        short = 'C',
-        long,
-        help = "The command to run (e.g. dev, build, test, etc.)"
-    )]
-    pub commands: Vec<String>,
+    #[arg(short, long, help = "The command to run (e.g. dev, build, test, etc.)")]
+    pub command: String,
 
     #[arg(
-        short = 'W',
+        short,
         long,
         default_value = "false",
         help = "Watch the tasks and rerun them when their dependencies change"
@@ -76,4 +52,11 @@ pub struct Cli {
         help = "Show all the dependencies of the tasks, event those that are not going to be run"
     )]
     pub show_all_dependencies: bool,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum Interface {
+    Console,
+    Tui,
+    // Web,
 }
