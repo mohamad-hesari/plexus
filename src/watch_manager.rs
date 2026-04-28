@@ -236,6 +236,7 @@ impl WatchManager for App {
             let this_watcher_state = Arc::clone(&state);
             state
                 .spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                     info!("Started watcher for task {}", task_name);
                     let debounder = Arc::new(Mutex::new(Debouncer { handle: None }));
                     let mut rx = rx.lock().await;
@@ -266,7 +267,7 @@ impl WatchManager for App {
                                         .lock()
                                         .await
                                         .debounce(Duration::from_millis(500), async move || {
-                                            debug!("File change event for task {}: {:?}", name, event);
+                                            info!("File change event for task {}: {:?}", name, event);
                                             emit!(StateEvent::FileChanged {
                                                 task_name: name.clone()
                                             });

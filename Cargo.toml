@@ -3,6 +3,19 @@ name = "pnpm-task-tui"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+opt-level = 3
+debug = false
+split-debuginfo = "unpacked"
+strip = "symbols"
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = 'unwind'
+incremental = false
+codegen-units = 16
+rpath = true
+
 [[bin]]
 name = "ptt"
 path = "src/main.rs"
@@ -22,14 +35,16 @@ notify = "8.2.0"
 globset = "0.4.18"
 regex = "1.12.3"
 scopeguard = "1.2.0"
-tracing = "0.1"
+tracing = { version = "0.1", features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 command-group = { version = "5.0", features = ["with-tokio"] }
 
-[profile.release]
-opt-level = "z"   # Optimize for size ("z" is more aggressive than "s")
-lto = true        # Enable Link Time Optimization (removes unused code across crates)
-codegen-units = 1 # Reduces parallel compilation to allow better global optimization
-panic = "abort"   # Removes stack unwinding code (saves ~50-100KB)
-strip = true      # Automatically removes symbols and debug info (New in Rust 1.59+)
+
+# [profile.release]
+# # strip = true
+# opt-level = 0
+# # lto = true
+# # panic = "abort"
+# # codegen-units = 1
+# # debug = false

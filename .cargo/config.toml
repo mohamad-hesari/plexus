@@ -1,2 +1,14 @@
-# [build]
-# rustflags = ["--cfg", "tokio_unstable"]
+[build]
+rustflags = [
+  # Join the 'from' and 'to' paths with an '=' inside one string
+  "--remap-path-prefix=/=./",
+]
+
+[profile.release]
+opt-level = "z"   # Optimize for size ("z" is more aggressive than "s")
+lto = true        # Enable Link Time Optimization (removes unused code across crates)
+codegen-units = 1 # Reduces parallel compilation to allow better global optimization
+panic = "abort"   # Removes stack unwinding code (saves ~50-100KB)
+strip = true      # Automatically removes symbols and debug info (New in Rust 1.59+)
+# strip = "symbols" # Alternatively, you can specify to only strip symbols, keeping debug info for backtraces (New in Rust 1.59+)
+debug = false # Disable debug info (if not using strip)

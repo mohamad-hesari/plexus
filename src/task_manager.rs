@@ -8,7 +8,7 @@ use tokio::{
     fs,
     io::{AsyncBufReadExt, BufReader},
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::{
     app::{App, AppTask},
@@ -310,7 +310,7 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
                         Ok(Some(l)) if !l.trim().is_empty() => {
                             emit!(StateEvent::Output{
                                 task_name: task_name.to_string(),
-                                output: l,
+                                output: format!("[OUT]: {}", l.clone()),
                             });
                             // tokio::task::yield_now().await;
                         }
@@ -324,7 +324,7 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
                     if let Ok(Some(l)) = line {
                         emit!(StateEvent::Output{
                             task_name: task_name.to_string(),
-                            output: l.clone(),
+                            output: format!("[ERR]: {}", l.clone()),
                         });
                         debug!(%task_name, stderr = %l);
                     }
@@ -335,15 +335,20 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
             }
         }
 
+        let mut finished_status = TaskStatus::Finished;
         if let Ok(status) = child.wait().await {
-            debug!(%task_name, exit_status = ?status, "Process exited");
+            info!(%task_name, exit_status = ?status, "Process exited");
+            if !status.success() {
+                finished_status = TaskStatus::Failed;
+                info!(%task_name, "Process exited with failure");
+            }
         } else {
-            debug!(%task_name, "Failed to wait for process");
+            info!(%task_name, "Failed to wait for process");
         }
 
         emit!(StateEvent::Status {
             task_name: task_name.to_string(),
-            status: TaskStatus::Finished,
+            status: finished_status,
         });
     }
 }

@@ -136,10 +136,10 @@ impl AppState {
     pub async fn add_log(&self, level: Level, message: String) {
         let mut logs = self._logs.write().await;
         logs.push((level, message));
-        self._status_change
-            .0
-            .send(None)
-            .expect("Failed to send status change");
+        // self._status_change
+        //     .0
+        //     .send(None)
+        //     .expect("Failed to send status change");
     }
 
     pub async fn get_logs(&self) -> Vec<(Level, String)> {
@@ -218,9 +218,14 @@ impl AppState {
                 };
                 debug!("Tasks to restart: {:?}", tasks);
                 let mut state = self._state.write().await;
+                static NEED_RESTARTS: [TaskStatus; 3] = [
+                    TaskStatus::Finished,
+                    TaskStatus::Failed,
+                    TaskStatus::Initialized,
+                ];
                 for task in tasks {
                     if let Some(status) = state._statuses.get(&task)
-                        && *status == TaskStatus::Finished
+                        && NEED_RESTARTS.contains(status)
                     {
                         state
                             ._statuses

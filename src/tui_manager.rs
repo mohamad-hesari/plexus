@@ -20,11 +20,21 @@ use crate::{
     task_manager::TaskManager,
 };
 
-pub struct TuiTracingLayer;
+pub struct TuiTracingLayer {
+    handle: tokio::runtime::Handle,
+}
+
+impl Default for TuiTracingLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TuiTracingLayer {
     pub fn new() -> Self {
-        Self
+        Self {
+            handle: tokio::runtime::Handle::current(),
+        }
     }
 }
 
@@ -39,7 +49,7 @@ where
         let message = visitor.message;
         let level = *event.metadata().level();
 
-        tokio::spawn(async move {
+        self.handle.spawn(async move {
             App::instance().state.add_log(level, message).await;
         });
     }
@@ -73,13 +83,14 @@ impl TuiManager for App {
     async fn start_tui(&self) {
         info!("Starting TUI...");
         let state = Arc::clone(&self.state);
+        color_eyre::install().unwrap();
+        let terminal = Arc::new(Mutex::new(ratatui::init()));
+        let pure_tasks = Arc::new(state.get_tasks().await);
         self.state
             .spawn(async move {
-                color_eyre::install().unwrap();
-                let terminal = Arc::new(Mutex::new( ratatui::init()));
-                let pure_tasks = Arc::new(state.get_tasks().await);
                 let ui_state = Arc::new(RwLock::new(TuiState {
                     selected: 0,
+                    box_selected: BoxSelected::Tasks,
                     frame_count: 0,
                     show_log: false,
                     total_tasks: 0,
@@ -99,93 +110,83 @@ impl TuiManager for App {
                 let ui_state_clone = Arc::clone(&ui_state);
                 let state_clone = Arc::clone(&state);
                 let pure_tasks_clone = Arc::clone(&pure_tasks);
-                state.spawn(async move {
-                    loop {
-                        if !state_clone.is_running() {
-                            debug!("TUI status change listener detected app is no longer running, exiting...");
-                            break;
-                        }
-                        rx_status_change.changed().await.unwrap();
-                        debug!("Received task status change event, marking TUI as dirty...");
-                        let mut t = terminal_clone.lock().await;
-                        render(&mut t, Arc::clone(&ui_state_clone), Arc::clone(&state_clone), Arc::clone(&pure_tasks_clone)).await;
-                        drop(t);
-                    }
-                }).await;
-                let state= Arc::clone(&state);
-                // let (sx,mut rx) = tokio::sync::mpsc::unbounded_channel::<event::KeyEvent>();
+
                 loop {
-                    if !state.is_running() {
-                        debug!("TUI event loop detected app is no longer running, exiting...");
+                    if !state_clone.is_running() {
+                        debug!("TUI initialization detected app is no longer running, exiting...");
                         break;
                     }
-                    let maybe_event = reader.next().await;
 
                     let start = Instant::now();
-                    if let Some(Ok(event::Event::Key(key_event))) = maybe_event {
-                        // Handle directly. If this feels slow, it's because of the WRITE lock in handle_key
-                        if handle_key_event(key_event, Arc::clone(&ui_state)).await {
-                            // Instead of spawning, just trigger the render here directly
-                            let mut t = terminal.lock().await;
-                            render(&mut t, Arc::clone(&ui_state), Arc::clone(&state), Arc::clone(&pure_tasks)).await;
+
+                    let mut t = terminal_clone.lock().await;
+                    render(&mut t, Arc::clone(&ui_state_clone), Arc::clone(&state_clone), Arc::clone(&pure_tasks_clone)).await;
+                    drop(t);
+
+                    debug!("TUI render took {:?} ms", start.elapsed().as_millis());
+
+                    tokio::select! {
+                        _ = rx_status_change.changed() => {
+                            rx_status_change.borrow_and_update();
+                            debug!("Received initial task status change event during TUI setup, marking TUI as dirty...");
+                        }
+                        maybe_event = reader.next() => {
+                            if let Some(Ok(event::Event::Key(key_event))) = maybe_event {
+                                // Handle directly. If this feels slow, it's because of the WRITE lock in handle_key
+                                if handle_key_event(key_event, Arc::clone(&ui_state)).await {
+                                    // Instead of spawning, just trigger the render here directly
+                                    // let mut t = terminal_clone.lock().await;
+                                    // render(&mut t, Arc::clone(&ui_state), Arc::clone(&state_clone), Arc::clone(&pure_tasks_clone)).await;
+                                    // drop(t);
+                                }
+                            }
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                            tokio::task::yield_now().await; // Yield to allow other tasks to run
                         }
                     }
-                        debug!("TUI event loop iteration took {:?} ms", start.elapsed().as_millis());
-                    // tokio::select! {
-                    //     // running = state.is_running_blocking() => {
-                    //     //     if !running {
-                    //     //         debug!("TUI event loop detected app is no longer running, exiting...");
-                    //     //         break;
-                    //     //     }
-                    //     // }
-                    //     // _ = rx_status_change.changed() => {
-                    //     //     rx_status_change.borrow_and_update();
-                    //     //     debug!("Received task status change event, marking TUI as dirty...");
-                    //     //     render(&mut terminal, Arc::clone(&ui_state), Arc::clone(&state), Arc::clone(&pure_tasks)).await;
-                    //     // }
-                    //     maybe_event = reader.next() => {
-                    //         if let Some(Ok(event::Event::Key(key_event))) = maybe_event {
-                    //             // Handle directly. If this feels slow, it's because of the WRITE lock in handle_key_event.
-                    //             if handle_key_event(key_event, Arc::clone(&ui_state)).await {
-                    //                 // Instead of spawning, just trigger the render here directly
-                    //                 let mut t = terminal.lock().await;
-                    //                 render(&mut t, Arc::clone(&ui_state), Arc::clone(&state), Arc::clone(&pure_tasks)).await;
-                    //             }
-                    //         }
-                    //     }
-                    //     // maybe_event = reader.next() => {
-                    //     //     info!("********** Received terminal event: {:?}", maybe_event);
-                    //     //     if let Some(Ok(event::Event::Key(key_event))) = maybe_event &&
-                    //     //            let Err(e) = sx.send(key_event) {
-                    //     //         error!("Failed to send key event: {:?}", e);
-                    //     //     }
-                    //     // } 
-                    //     // key_event = rx.recv() => {
-                    //     //     debug!("Received internal TUI update signal");
-                    //     //     if let Some(key_event) = key_event {
-                    //     //         let sx_key_clone = Arc::clone(&sx_key_clone);
-                    //     //         let ui_state = Arc::clone(&ui_state);
-                    //     //         tokio::spawn(async move {
-                    //     //             if handle_key_event(key_event, ui_state).await {
-                    //     //                 debug!("Key event handled");
-                    //     //                 if let Err(e) = sx_key_clone.send(None) {
-                    //     //                     error!("Failed to send status change event: {:?}", e);
-                    //     //                 } else {
-                    //     //                     debug!("Status change event sent successfully");
-                    //     //                 }
-                    //     //             }
-                    //     //         });
-                    //     //     }
-                    //     // }
-                    // }
                 }
+
+                // state.spawn(async move {
+                //     loop {
+                //         if !state_clone.is_running() {
+                //             debug!("TUI status change listener detected app is no longer running, exiting...");
+                //             break;
+                //         }
+                //         rx_status_change.changed().await.unwrap();
+                //         debug!("Received task status change event, marking TUI as dirty...");
+                //         let mut t = terminal_clone.lock().await;
+                //         render(&mut t, Arc::clone(&ui_state_clone), Arc::clone(&state_clone), Arc::clone(&pure_tasks_clone)).await;
+                //         drop(t);
+                //     }
+                // }).await;
+                // let state= Arc::clone(&state);
+                // // let (sx,mut rx) = tokio::sync::mpsc::unbounded_channel::<event::KeyEvent>();
+                // loop {
+                //     if !state.is_running() {
+                //         debug!("TUI event loop detected app is no longer running, exiting...");
+                //         break;
+                //     }
+                //     let maybe_event = reader.next().await;
+                //
+                //     let start = Instant::now();
+                //     if let Some(Ok(event::Event::Key(key_event))) = maybe_event {
+                //         // Handle directly. If this feels slow, it's because of the WRITE lock in handle_key
+                //         if handle_key_event(key_event, Arc::clone(&ui_state)).await {
+                //             // Instead of spawning, just trigger the render here directly
+                //             let mut t = terminal.lock().await;
+                //             render(&mut t, Arc::clone(&ui_state), Arc::clone(&state), Arc::clone(&pure_tasks)).await;
+                //         }
+                //     }
+                //     debug!("TUI event loop iteration took {:?} ms", start.elapsed().as_millis());
+                // }
 
                 ratatui::restore();
             }).await;
     }
 }
 
-// static SPINERS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+static SPINERS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 async fn render(
     terminal: &mut DefaultTerminal,
@@ -262,7 +263,13 @@ fn render_ui(state: &mut TuiState) -> impl FnOnce(&mut Frame) -> io::Result<()> 
                 .areas(status_area);
 
         if state.show_log {
-            draw_logs(frame, &mut state.log_entry, log_area);
+            draw_logs(
+                frame,
+                &mut state.log_entry,
+                log_area,
+                "Logs",
+                state.box_selected == BoxSelected::Logs,
+            );
         }
 
         frame.render_widget(
@@ -284,10 +291,12 @@ fn render_ui(state: &mut TuiState) -> impl FnOnce(&mut Frame) -> io::Result<()> 
             .enumerate()
             .map(|(i, task)| {
                 let status = if *task.status() == TaskStatus::Running {
-                    // format!("{} RUNNING", SPINERS[state.frame_count % SPINERS.len()])
-                    " RUNNING".to_string()
+                    format!("{} RUNNING", SPINERS[state.frame_count % SPINERS.len()])
+                    // " RUNNING".to_string()
                 } else if *task.status() == TaskStatus::Finished {
                     " Finished".to_string()
+                } else if *task.status() == TaskStatus::Failed {
+                    " ERROR".to_string()
                 } else {
                     " IDLE".to_string()
                 };
@@ -297,6 +306,8 @@ fn render_ui(state: &mut TuiState) -> impl FnOnce(&mut Frame) -> io::Result<()> 
                     Style::default().fg(Color::Green).bold()
                 } else if *task.status() == TaskStatus::Finished {
                     Style::default().fg(Color::White).dim()
+                } else if *task.status() == TaskStatus::Failed {
+                    Style::default().fg(Color::Red).bold()
                 } else {
                     Style::default()
                 };
@@ -304,36 +315,142 @@ fn render_ui(state: &mut TuiState) -> impl FnOnce(&mut Frame) -> io::Result<()> 
             })
             .collect();
 
+        let task_selected = state.box_selected == BoxSelected::Tasks;
+        // let title = if state.tasks.is_empty() {
+        //     "Tasks".to_string()
+        // } else {
+        //     "Tasks (↑↓, r to restart, s to stop/start, tab to switch box)".to_string()
+        // };
         let list = List::new(items)
-            .block(Block::bordered().title("Tasks (↑↓ to select, Enter/r to start, s to stop)"))
+            // .block(
+            //     Block::bordered()
+            //         .border_type(if task_selected {
+            //             BorderType::Thick
+            //         } else {
+            //             BorderType::Plain
+            //         })
+            //         .style(if task_selected {
+            //             Style::default().fg(Color::Yellow)
+            //         } else {
+            //             Style::default()
+            //         })
+            //         .title(title),
+            // )
             .highlight_style(Style::default().fg(Color::Yellow));
 
-        frame.render_widget(list, left);
+        let tasks_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(if task_selected {
+                BorderType::Thick
+            } else {
+                BorderType::Plain
+            })
+            .style(if task_selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            })
+            .title("Tasks");
 
+        let tasks_block_area = tasks_block.inner(left);
+        frame.render_widget(tasks_block, left);
+
+        let [tasks_list_area, help_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(9)]).areas(tasks_block_area);
+
+        frame.render_widget(list, tasks_list_area);
+        let help_text = [
+            "Commands:",
+            "  ↑/k: Move up",
+            "  ↓/j: Move down",
+            "  r/Enter: Restart selected task",
+            "  s: Stop/start selected task",
+            "  Tab: Switch between boxes",
+            "  l: Toggle logs",
+            "  c: Clear logs",
+            "  q: Quit",
+        ]
+        .iter()
+        .map(|s| ratatui::text::Line::from(*s))
+        .collect::<Vec<_>>();
+        let help_paragraph = Paragraph::new(Text::from(help_text))
+            .style(Style::default().fg(Color::White).rapid_blink());
+        frame.render_widget(help_paragraph, help_area);
+
+        // frame.render_widget(list, tasks_block);
+
+        let output_title = if state.tasks.is_empty() {
+            "Output".to_string()
+        } else {
+            format!(
+                "Output - {}",
+                state
+                    .tasks
+                    .get(state.selected)
+                    .map(|t| t.name())
+                    .unwrap_or_default()
+            )
+        };
         // Right: Selected Task Output
-        draw_logs(frame, &mut state.output_entry, right);
+        draw_logs(
+            frame,
+            &mut state.output_entry,
+            right,
+            &output_title,
+            state.box_selected == BoxSelected::Output,
+        );
         io::Result::Ok(())
     }
 }
 
-fn draw_logs(f: &mut Frame, app: &mut LogEntry, area: Rect) {
+fn draw_logs(f: &mut Frame, app: &mut LogEntry, area: Rect, title: &str, selected: bool) {
     let chunks = Layout::vertical([Constraint::Fill(1)]).split(area);
     app.set_viewport_height(chunks[0].height);
     // Convert logs to Lines
     let lines: Vec<_> = app
         .logs
         .iter()
-        .map(|l| ratatui::text::Line::from(l.as_str()).style(Style::default().fg(Color::White)))
+        .map(|l| {
+            let color = if l.starts_with("[ERR]") {
+                Color::Red
+            } else if l.starts_with("[WARN]") {
+                Color::Yellow
+            } else if l.starts_with("[INFO]") {
+                Color::Green
+            } else {
+                Color::White
+            };
+            ratatui::text::Line::from(l.as_str()).style(Style::default().fg(color))
+        })
         .collect();
 
     let max_scroll = lines.len().saturating_sub(1) as u16;
     let clamped_scroll = app.scroll.min(max_scroll);
 
+    let final_title = if selected {
+        format!(
+            "{} (f: follow, ↑/PageUp: scroll up, ↓/PageDown: scroll down, Home: top, End: bottom)",
+            title
+        )
+    } else {
+        title.to_string()
+    };
+
     let paragraph = Paragraph::new(Text::from(lines))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Live Logs (tail -f mode)"),
+                .border_type(if selected {
+                    BorderType::Thick
+                } else {
+                    BorderType::Plain
+                })
+                .style(if selected {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                })
+                .title(final_title),
         )
         .scroll((clamped_scroll, 0))
         .wrap(Wrap { trim: true });
@@ -355,8 +472,16 @@ fn draw_logs(f: &mut Frame, app: &mut LogEntry, area: Rect) {
     );
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoxSelected {
+    Tasks,
+    Logs,
+    Output,
+}
+
 struct TuiState {
     selected: usize,
+    box_selected: BoxSelected,
     show_log: bool,
     total_tasks: usize,
     log_entry: LogEntry,
@@ -376,6 +501,9 @@ async fn handle_key_event(key_event: event::KeyEvent, state: Arc<RwLock<TuiState
         KeyCode::Char('l') => {
             let mut state = state.write().await;
             state.show_log = !state.show_log;
+            if !state.show_log && state.box_selected == BoxSelected::Logs {
+                state.box_selected = BoxSelected::Tasks;
+            }
             drop(state);
             true
         }
@@ -414,62 +542,120 @@ async fn handle_key_event(key_event: event::KeyEvent, state: Arc<RwLock<TuiState
             }
             true
         }
+        KeyCode::Tab => {
+            let mut state = state.write().await;
+            if state.box_selected == BoxSelected::Tasks {
+                state.box_selected = BoxSelected::Output;
+            } else if state.box_selected == BoxSelected::Output {
+                if state.show_log {
+                    state.box_selected = BoxSelected::Logs;
+                } else {
+                    state.box_selected = BoxSelected::Tasks;
+                }
+            } else {
+                state.box_selected = BoxSelected::Tasks;
+            }
+            drop(state);
+            true
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             let mut state = state.write().await;
-            state.selected = state.selected.saturating_sub(1).max(0);
+            if state.box_selected == BoxSelected::Tasks {
+                state.selected = state.selected.saturating_sub(1).max(0);
+            } else if state.box_selected == BoxSelected::Logs {
+                state.log_entry.scroll_up(1);
+            } else if state.box_selected == BoxSelected::Output {
+                state.output_entry.scroll_up(1);
+            }
             drop(state);
             true
         }
         KeyCode::Down | KeyCode::Char('j') => {
             let mut state = state.write().await;
-            state.selected = state.selected.add(1).min(state.total_tasks - 1);
+            if state.box_selected == BoxSelected::Tasks {
+                state.selected = state.selected.add(1).min(state.total_tasks - 1);
+            } else if state.box_selected == BoxSelected::Logs {
+                state.log_entry.scroll_down(1);
+            } else if state.box_selected == BoxSelected::Output {
+                state.output_entry.scroll_down(1);
+            }
             drop(state);
             true
         }
         KeyCode::PageDown | KeyCode::PageUp | KeyCode::End | KeyCode::Home | KeyCode::Char('f') => {
             let mut state = state.write().await;
-            if state.show_log {
-                match key_event.code {
-                    KeyCode::PageDown => state.log_entry.scroll_down(10),
-                    KeyCode::PageUp => state.log_entry.scroll_up(10),
-
-                    KeyCode::End => {
-                        state.log_entry.follow = true;
-                        state.log_entry.scroll_to_bottom();
-                    }
-                    KeyCode::Home => {
-                        state.log_entry.follow = false;
-                        state.log_entry.scroll = 0;
-                    }
-                    KeyCode::Char('f') => {
-                        state.log_entry.follow = !state.log_entry.follow;
-                        if state.log_entry.follow {
-                            state.log_entry.scroll_to_bottom();
-                        }
-                    }
-                    _ => (),
-                }
+            let entry = if state.box_selected == BoxSelected::Logs {
+                &mut state.log_entry
+            } else if state.box_selected == BoxSelected::Output {
+                &mut state.output_entry
             } else {
-                match key_event.code {
-                    KeyCode::PageDown => state.output_entry.scroll_down(10),
-                    KeyCode::PageUp => state.output_entry.scroll_up(10),
-                    KeyCode::End => {
-                        state.output_entry.follow = true;
-                        state.output_entry.scroll_to_bottom();
-                    }
-                    KeyCode::Home => {
-                        state.output_entry.follow = false;
-                        state.output_entry.scroll = 0;
-                    }
-                    KeyCode::Char('f') => {
-                        state.output_entry.follow = !state.output_entry.follow;
-                        if state.output_entry.follow {
-                            state.output_entry.scroll_to_bottom();
-                        }
-                    }
-                    _ => (),
+                drop(state);
+                return false;
+            };
+
+            match key_event.code {
+                KeyCode::PageDown => entry.scroll_down(10),
+                KeyCode::PageUp => entry.scroll_up(10),
+
+                KeyCode::End => {
+                    entry.follow = true;
+                    entry.scroll_to_bottom();
                 }
+                KeyCode::Home => {
+                    entry.follow = false;
+                    entry.scroll = 0;
+                }
+                KeyCode::Char('f') => {
+                    entry.follow = !entry.follow;
+                    if entry.follow {
+                        entry.scroll_to_bottom();
+                    }
+                }
+                _ => (),
             }
+
+            // if state.show_log && state.box_selected == BoxSelected::Logs {
+            //     match key_event.code {
+            //         KeyCode::PageDown => state.log_entry.scroll_down(10),
+            //         KeyCode::PageUp => state.log_entry.scroll_up(10),
+            //
+            //         KeyCode::End => {
+            //             state.log_entry.follow = true;
+            //             state.log_entry.scroll_to_bottom();
+            //         }
+            //         KeyCode::Home => {
+            //             state.log_entry.follow = false;
+            //             state.log_entry.scroll = 0;
+            //         }
+            //         KeyCode::Char('f') => {
+            //             state.log_entry.follow = !state.log_entry.follow;
+            //             if state.log_entry.follow {
+            //                 state.log_entry.scroll_to_bottom();
+            //             }
+            //         }
+            //         _ => (),
+            //     }
+            // } else if state.box_selected == BoxSelected::Output {
+            //     match key_event.code {
+            //         KeyCode::PageDown => state.output_entry.scroll_down(10),
+            //         KeyCode::PageUp => state.output_entry.scroll_up(10),
+            //         KeyCode::End => {
+            //             state.output_entry.follow = true;
+            //             state.output_entry.scroll_to_bottom();
+            //         }
+            //         KeyCode::Home => {
+            //             state.output_entry.follow = false;
+            //             state.output_entry.scroll = 0;
+            //         }
+            //         KeyCode::Char('f') => {
+            //             state.output_entry.follow = !state.output_entry.follow;
+            //             if state.output_entry.follow {
+            //                 state.output_entry.scroll_to_bottom();
+            //             }
+            //         }
+            //         _ => (),
+            //     }
+            // }
             drop(state);
             true
         }

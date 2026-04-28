@@ -47,6 +47,7 @@ pub struct App {
     pub tasks: Arc<Mutex<HashMap<String, Arc<AppTask>>>>,
     pub aborts: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
     pub watchers: Arc<RwLock<Vec<AppWatcher>>>,
+    // pub queue: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
 }
 
 impl App {
@@ -60,7 +61,7 @@ impl App {
             cli.web = false;
             cli.log_console = false;
         }
-        let cli = Arc::new(Cli::parse());
+        let cli = Arc::new(cli);
         App {
             state,
             pnpm,
