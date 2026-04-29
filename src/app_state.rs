@@ -180,7 +180,12 @@ impl AppState {
             StateEvent::Status { task_name, status } => {
                 info!("Task {} status changed to {:?}", task_name, status);
                 let mut state = self._state.write().await;
-                state._statuses.insert(task_name, status);
+                state._statuses.insert(task_name.clone(), status.clone());
+
+                if let Some(outputs) = state._outputs.get_mut(&task_name) {
+                    let mut outputs = outputs.write().await;
+                    outputs.push(format!("Status changed to {:?}", status));
+                }
                 self._status_changed
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 self._status_change
@@ -342,17 +347,3 @@ impl Default for AppState {
         Self::new()
     }
 }
-
-// 2026-04-25T18:48:46.938092Z DEBUG ThreadId(02) pnpm_task_tui::task_manager: Checking task task_name=tenant:dev project_name=tenant command=dev status=Finished
-// 2026-04-25T18:48:46.938131Z DEBUG ThreadId(02) pnpm_task_tui::task_manager: Checking task task_name=spa:dev project_name=spa command=dev status=Running
-// 2026-04-25T18:48:46.938144Z DEBUG ThreadId(02) pnpm_task_tui::task_manager: Checking task task_name=plugins:dev project_name=plugins command=dev status=Finished
-// 2026-04-25T18:48:46.938158Z DEBUG ThreadId(02) pnpm_task_tui::task_manager: Checking task task_name=core:dev project_name=core command=dev status=Finished
-// 2026-04-25T18:48:46.938171Z DEBUG ThreadId(02) pnpm_task_tui::task_manager: Checking task task_name=tw-ui-core:dev project_name=tw-ui-core command=dev status=Finished
-// 2026-04-25T18:48:47.836532Z DEBUG ThreadId(27) pnpm_task_tui::watch_manager: File change event for task tenant: Event { kind: Modify(Metadata(Any)), paths: ["/flexBox.ts"], attr:tracker: None, attr:flag: None, attr:info: None, attr:source: None }
-// 2026-04-25T18:48:47.836586Z DEBUG ThreadId(27) pnpm_task_tui::app_state: File changed for task: tenant
-// 2026-04-25T18:48:47.836604Z DEBUG ThreadId(27) pnpm_task_tui::app_state: Tasks to restart: ["tenant"]
-// 2026-04-25T18:48:47.939102Z DEBUG ThreadId(27) pnpm_task_tui::task_manager: Checking task task_name=tenant:dev project_name=tenant command=dev status=Finished
-// 2026-04-25T18:48:47.939145Z DEBUG ThreadId(27) pnpm_task_tui::task_manager: Checking task task_name=spa:dev project_name=spa command=dev status=Running
-// 2026-04-25T18:48:47.939160Z DEBUG ThreadId(27) pnpm_task_tui::task_manager: Checking task task_name=plugins:dev project_name=plugins command=dev status=Finished
-// 2026-04-25T18:48:47.939174Z DEBUG ThreadId(27) pnpm_task_tui::task_manager: Checking task task_name=core:dev project_name=core command=dev status=Finished
-// 2026-04-25T18:48:47.939188Z DEBUG ThreadId(27) pnpm_task_tui::task_manager: Checking task task_name=tw-ui-core:dev project_name=tw-ui-core command=dev status=Finished
