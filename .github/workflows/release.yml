@@ -28,7 +28,6 @@ jobs:
       - name: Install Rust
         run: |
           rustup target add ${{ matrix.target }}
-          # If building for Musl on Ubuntu, you need the tools:
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
             sudo apt-get install -y musl-tools
           fi
@@ -55,9 +54,22 @@ jobs:
 
       - name: Publish to NPM
         working-directory: packages/${{ matrix.pkg_name }}
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          npm pkg set name="plexus"
           npm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
-          npm publish --access public
+          npm publish --access public --registry https://registry.npmjs.org
+
+      - name: Deploy to GitHub
+        working-directory: packages/${{ matrix.pkg_name }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm pkg set name="@mohamad-hesari/plexus"
+          npm config set //npm.pkg.github.com/:_authToken $NODE_AUTH_TOKEN
+          npm publish --registry https://npm.pkg.github.com
 
   publish-main:
     needs: build
@@ -70,15 +82,23 @@ jobs:
       - name: Version Main Package and Deps
         working-directory: packages/main
         run: |
-          # Update the main version
           jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
-
-          # Update all optionalDependencies to match the new version
           jq ".optionalDependencies | map_values(\"${{ env.VERSION }}\")" package.json > deps.json
           jq ".optionalDependencies = input" package.json deps.json > temp.json && mv temp.json package.json
 
       - name: Publish Main
         working-directory: packages/main
+        if: ${{ secrets.NPM_TOKEN != '' }}
         run: |
           npm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
           npm publish --access public
+
+      - name: Deploy to GitHub
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCOPE: "@mohamad-hesari"
+        run: |
+          npm pkg set name="$SCOPE/plexus"
+          jq --arg scope "$SCOPE/" '.optionalDependencies |= with_entries(.key |= ($scope + .))' package.json > temp.json && mv temp.json package.json
+          npm config set //npm.pkg.github.com/:_authToken $NODE_AUTH_TOKEN
+          npm publish --registry https://npm.pkg.github.com

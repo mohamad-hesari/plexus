@@ -6,33 +6,34 @@ const platform = process.platform;
 const arch = process.arch;
 let pkgPlatform = platform;
 
-// Check for Musl (Alpine)
-if (platform === "linux") {
+// Alpine/Musl detection
+if (platform === "linux" && fs.existsSync("/etc/alpine-release")) {
+  pkgPlatform = "linux-musl";
+}
+
+const baseName = `plexus-${pkgPlatform}-${arch}`;
+const scopedName = `@mohamad-hesari/${baseName}`;
+
+function findBinary() {
   try {
-    // Alpine usually has this file, or you can check ldd version
-    if (
-      fs.existsSync("/etc/alpine-release") ||
-      (process.report &&
-        process.report.getReport().header.glibcVersionRuntime === undefined)
-    ) {
-      pkgPlatform = "linux-musl";
-    }
+    return require.resolve(`${scopedName}/bin/plexus`);
   } catch (e) {
-    // Fallback to standard linux if check fails
-    pkgPlatform = "linux";
+    try {
+      return require.resolve(`${baseName}/bin/plexus`);
+    } catch (e2) {
+      return null;
+    }
   }
 }
 
-const packageName = `plexus-${pkgPlatform}-${arch}`;
+const binaryPath = findBinary();
 
-try {
-  const binaryPath = require.resolve(`${packageName}/bin/plexus`);
+if (binaryPath) {
   const child = spawn(binaryPath, process.argv.slice(2), { stdio: "inherit" });
   child.on("exit", (code) => process.exit(code || 0));
-} catch (err) {
+} else {
   console.error(
-    `Error: Plexus could not find a compatible binary for ${platform}-${arch}.`,
+    `Error: Plexus could not find binary package: ${baseName} or ${scopedName}`,
   );
-  console.error(`Attempted to load: ${packageName}`);
   process.exit(1);
 }
