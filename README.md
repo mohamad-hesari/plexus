@@ -1,20 +1,17 @@
----
-
-```text
-# 🧬 Plexus
+## 🧬 Plexus
 
 **A high-performance, terminal-based task runner and process manager built for speed.**
 
-Plexus is a developer-centric tool designed to orchestrate complex task workflows with a modern Terminal User Interface (TUI). Whether you're managing microservices, long-running build pipelines, or complex monorepos, Plexus provides the observability and control you need directly in your terminal.[cite: 1]
+Plexus is a developer-centric tool designed to orchestrate complex task workflows with a modern Terminal User Interface (TUI). Whether you're managing microservices, long-running build pipelines, or complex monorepos, Plexus provides the observability and control you need directly in your terminal.
 
 ---
 
 ## ✨ Features
 
-- **Native Performance:** Built with **Rust** for near-zero overhead and memory safety.[cite: 1]
-- **Modern TUI:** Interactive interface powered by `ratatui` for real-time process monitoring.[cite: 1]
-- **Cross-Platform:** Native binaries distributed via npm for Linux (x64/ARM), macOS, and Windows.[cite: 1]
-- **Developer-First:** Designed to work seamlessly in `pnpm` monorepos and advanced development environments.[cite: 1]
+- **Native Performance:** Built with **Rust** for near-zero overhead and memory safety.
+- **Modern TUI:** Interactive interface powered by `ratatui` for real-time process monitoring.
+- **Cross-Platform:** Native binaries distributed via npm for Linux (x64/ARM), macOS, and Windows.
+- **Developer-First:** Designed to work seamlessly in `pnpm` monorepos and advanced development environments.
 
 ---
 
@@ -42,7 +39,7 @@ npm install -g @m.hesari/plexus
 
 ## 🛠 Configuration
 
-Plexus looks for a configuration file in your project root (e.g., `plexus.json`).[cite: 1]
+Plexus looks for a configuration file in your project root (e.g., `plexus.json`).
 
 ```json
 {
@@ -58,16 +55,16 @@ Plexus looks for a configuration file in your project root (e.g., `plexus.json`)
 
 ## 📦 Architecture
 
-Plexus uses a **hybrid distribution model**:[cite: 1]
+Plexus uses a **hybrid distribution model**:
 
-1.  **Core:** High-performance Rust binaries tailored for specific CPU architectures.[cite: 1]
-2.  **Wrapper:** A lightweight Node.js loader that detects your system profile (OS/Arch) and executes the correct native binary.[cite: 1]
+1.  **Core:** High-performance Rust binaries tailored for specific CPU architectures.
+2.  **Wrapper:** A lightweight Node.js loader that detects your system profile (OS/Arch) and executes the correct native binary.
 
 ---
 
 ## 🏗 Development
 
-If you want to build Plexus from source:[cite: 1]
+If you want to build Plexus from source:
 
 1.  **Clone the repo:**
     ```bash
@@ -86,4 +83,4 @@ If you want to build Plexus from source:[cite: 1]
 
 ## 📄 License
 
-Distributed under the MIT License. See `LICENSE` for more information.[cite: 1]
+Distributed under the MIT License. See `LICENSE` for more information.
