@@ -55,10 +55,8 @@ jobs:
       - name: Publish to NPM
         working-directory: packages/${{ matrix.pkg_name }}
         if: ${{ secrets.NPM_TOKEN != '' }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm pkg set name="plexus"
+          npm pkg set name="plexus-${{ matrix.pkg_name }}"
           npm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
           npm publish --access public --registry https://registry.npmjs.org
 
@@ -67,7 +65,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm pkg set name="@mohamad-hesari/plexus"
+          npm pkg set name="@mohamad-hesari/plexus-${{ matrix.pkg_name }}"
           npm config set //npm.pkg.github.com/:_authToken $NODE_AUTH_TOKEN
           npm publish --registry https://npm.pkg.github.com
 
@@ -82,9 +80,10 @@ jobs:
       - name: Version Main Package and Deps
         working-directory: packages/main
         run: |
-          jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
-          jq ".optionalDependencies | map_values(\"${{ env.VERSION }}\")" package.json > deps.json
-          jq ".optionalDependencies = input" package.json deps.json > temp.json && mv temp.json package.json
+          # jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
+          # jq ".optionalDependencies | map_values(\"${{ env.VERSION }}\")" package.json > deps.json
+          # jq ".optionalDependencies = input" package.json deps.json > temp.json && mv temp.json package.json
+          jq ".version = \"${{ env.VERSION }}\" | .optionalDependencies[] |= \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
 
       - name: Publish Main
         working-directory: packages/main
@@ -94,6 +93,7 @@ jobs:
           npm publish --access public
 
       - name: Deploy to GitHub
+        working-directory: packages/main
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCOPE: "@mohamad-hesari"
