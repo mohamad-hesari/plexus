@@ -79,7 +79,7 @@ jobs:
           MY_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         if: ${{ env.MY_NPM_TOKEN != ' ' }}
         run: |
-          npm pkg set name="@mhesari/plexus-${{ matrix.pkg_name }}"
+          npm pkg set name="@m.hesari/plexus-${{ matrix.pkg_name }}"
           npm config set //registry.npmjs.org/:_authToken $MY_NPM_TOKEN
           npm publish --access public --registry https://registry.npmjs.org
 
@@ -120,7 +120,7 @@ jobs:
           MY_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         if: ${{ env.MY_NPM_TOKEN != ' ' }}
         run: |
-          npm pkg set name="@mhesari/plexus"
+          npm pkg set name="@m.hesari/plexus"
           npm config set //registry.npmjs.org/:_authToken $MY_NPM_TOKEN
           npm publish --access public
 

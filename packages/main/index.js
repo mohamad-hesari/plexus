@@ -13,7 +13,7 @@ if (platform === "linux" && fs.existsSync("/etc/alpine-release")) {
 
 const baseName = `plexus-${pkgPlatform}-${arch}`;
 const githubName = `@mohamad-hesari/${baseName}`;
-const normalName = `@mhesari/${baseName}`;
+const normalName = `@m.hesari/${baseName}`;
 
 function findBinary() {
   try {
