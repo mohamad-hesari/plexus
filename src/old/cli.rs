@@ -2,8 +2,8 @@ use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    name = "pnpm-task-tui",
-    bin_name = "ptt",
+    name = "plexus",
+    bin_name = "plexus",
     display_name = "pnpm Tasks Terminal UI",
     author = "Mohammad Hesari <mohammad.hesari@hotmail.com>",
     version = "1.0",

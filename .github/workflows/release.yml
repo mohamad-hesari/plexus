@@ -1,0 +1,84 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            pkg_name: linux-x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            pkg_name: linux-musl-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            pkg_name: darwin-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            pkg_name: win32-x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          rustup target add ${{ matrix.target }}
+          # If building for Musl on Ubuntu, you need the tools:
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            sudo apt-get install -y musl-tools
+          fi
+
+      - name: Set Version Variable
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Sync Cargo.toml version
+        shell: bash
+        run: |
+          sed -i "s/^version = \".*\"/version = \"${{ env.VERSION }}\"/" Cargo.toml
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare & Version Package
+        shell: bash
+        run: |
+          cd packages/${{ matrix.pkg_name }}
+          jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
+          mkdir -p bin
+          cp ../../target/${{ matrix.target }}/release/plexus* ./bin/ 2>/dev/null || cp ../../target/${{ matrix.target }}/release/plexus.exe ./bin/
+
+      - name: Publish to NPM
+        working-directory: packages/${{ matrix.pkg_name }}
+        run: |
+          npm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+          npm publish --access public
+
+  publish-main:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set Version Variable
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Version Main Package and Deps
+        working-directory: packages/main
+        run: |
+          # Update the main version
+          jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
+
+          # Update all optionalDependencies to match the new version
+          jq ".optionalDependencies | map_values(\"${{ env.VERSION }}\")" package.json > deps.json
+          jq ".optionalDependencies = input" package.json deps.json > temp.json && mv temp.json package.json
+
+      - name: Publish Main
+        working-directory: packages/main
+        run: |
+          npm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+          npm publish --access public

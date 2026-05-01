@@ -259,10 +259,27 @@ impl TaskManager for App {
     }
 
     async fn stop_task(&self, task_name: &str) {
+        debug!(%task_name, "Stopping task");
+        let task = {
+            let tasks = self.tasks.lock().await;
+            tasks.get(task_name).cloned()
+        }
+        .unwrap_or_else(|| panic!("Task {} not found", task_name));
+        task.sx
+            .send(())
+            .unwrap_or_else(|_| panic!("Failed to send stop signal to task {}", task_name));
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
         let mut aborts = self.aborts.lock().await;
         if let Some(handle) = aborts.remove(task_name) {
+            debug!(%task_name, "Aborting task");
             handle.abort();
         }
+        emit!(StateEvent::Status {
+            task_name: task_name.to_string(),
+            status: TaskStatus::Stopped,
+        });
     }
 }
 
@@ -296,6 +313,7 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
+        let mut rx = task.rx.write().await;
 
         loop {
             if !App::instance().state.is_running() {
@@ -305,6 +323,11 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
             }
             tokio::select! {
                 // biased;
+                _ = rx.recv() => {
+                    debug!(%task_name, "Received stop signal for task");
+                    let _ = child.kill().await;
+                    break;
+                }
                 line = stdout_reader.next_line() => {
                     match line {
                         Ok(Some(l)) if !l.trim().is_empty() => {

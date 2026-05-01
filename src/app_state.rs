@@ -18,6 +18,7 @@ pub enum TaskStatus {
     Running,
     Finished,
     Failed,
+    Stopped,
 }
 
 pub struct State {
@@ -145,6 +146,11 @@ impl AppState {
     pub async fn get_logs(&self) -> Vec<(Level, String)> {
         let logs = self._logs.read().await;
         logs.clone()
+    }
+
+    pub async fn clear_logs(&self) {
+        let mut logs = self._logs.write().await;
+        logs.clear();
     }
 
     pub async fn get_tasks(&self) -> Vec<String> {

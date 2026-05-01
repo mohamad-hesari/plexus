@@ -1,0 +1,10 @@
+{
+  "name": "plexus-darwin-arm64",
+  "version": "1.0.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ]
+}

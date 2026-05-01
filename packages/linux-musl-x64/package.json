@@ -1,0 +1,11 @@
+{
+  "name": "plexus-linux-musl-x64",
+  "version": "1.0.0",
+  "description": "Musl Linux x64 binary for Plexus",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}

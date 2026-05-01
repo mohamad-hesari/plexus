@@ -1,0 +1,13 @@
+{
+  "name": "plexus",
+  "version": "1.0.0",
+  "bin": {
+    "plexus": "./index.js"
+  },
+  "optionalDependencies": {
+    "plexus-linux-x64": "1.0.0",
+    "plexus-linux-musl-x64": "1.0.0",
+    "plexus-darwin-arm64": "1.0.0",
+    "plexus-win32-x64": "1.0.0"
+  }
+}

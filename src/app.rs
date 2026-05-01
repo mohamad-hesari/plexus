@@ -13,14 +13,19 @@ pub struct AppTask {
     pub name: String,
     pub command: String,
     pub path: String,
+    pub sx: tokio::sync::mpsc::UnboundedSender<()>,
+    pub rx: RwLock<tokio::sync::mpsc::UnboundedReceiver<()>>,
 }
 
 impl AppTask {
     pub fn new(name: String, command: String, path: String) -> Self {
+        let (sx, rx) = tokio::sync::mpsc::unbounded_channel();
         AppTask {
             name,
             command,
             path,
+            sx,
+            rx: RwLock::new(rx),
         }
     }
 }

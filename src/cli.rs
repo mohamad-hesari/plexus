@@ -2,17 +2,19 @@ use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    name = "pnpm-task-tui",
-    bin_name = "ptt",
-    display_name = "pnpm Tasks Terminal UI",
-    author = "Mohammad Hesari <mohammad.hesari@hotmail.com>",
-    version = "1.0",
-    about = "This run pnpm task in parallel considering their dependencies",
-    long_about = "This run pnpm task in parallel considering their dependencies. 
-It can also watch the tasks and rerun them when their dependencies change. 
-All dependencies of the tasks must not be a long live process (e.g. dev) 
-and must exit after running (e.g. dev, build, test, etc.)\n
-Long live process example: tsc --watch, vite, tsup --watch, etc."
+    name = "plexus",
+    bin_name = "plexus",
+    display_name = "Plexus: Monorepo Task Orchestrator",
+    author = "Mohammad Hesari <mohamad.hesari@hotmail.com>",
+    // env!("CARGO_PKG_VERSION") pulls the version from Cargo.toml at compile time
+    version = env!("CARGO_PKG_VERSION"), 
+    about = "A TUI for dependency-aware pnpm task execution",
+    long_about = "Plexus is a high-performance terminal UI designed for pnpm monorepos. 
+It executes filtered workspace tasks by traversing the dependency graph from the bottom up, 
+ensuring that internal dependencies are fully built before dependent tasks begin.
+
+Note: All prerequisite tasks must be finite processes (e.g., build, test, lint). 
+Long-running processes like 'vite' or 'tsc --watch' should only be used for the final target task."
 )]
 pub struct Cli {
     #[arg(

@@ -17,7 +17,7 @@ codegen-units = 16
 rpath = true
 
 [[bin]]
-name = "ptt"
+name = "plexus"
 path = "src/main.rs"
 
 
