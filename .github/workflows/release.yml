@@ -87,8 +87,11 @@ jobs:
         working-directory: packages/${{ matrix.pkg_name }}
         run: |
           npm install -g npm@latest
+          npm pkg set repository.type="git"
+          npm pkg set repository.url="https://github.com/mohamad-hesari/plexus"
+          npm pkg set repository.directory="packages/${{ matrix.pkg_name }}"
           npm pkg set name="@m.hesari/plexus-${{ matrix.pkg_name }}"
-          npm publish --access public --provenance --registry https://registry.npmjs.org
+          npm publish --access public --provenance
 
       - name: Deploy to GitHub
         working-directory: packages/${{ matrix.pkg_name }}
@@ -135,9 +138,12 @@ jobs:
           SCOPE: "@m.hesari"
         run: |
           npm install -g npm@latest
+          npm pkg set repository.type="git"
+          npm pkg set repository.url="https://github.com/mohamad-hesari/plexus"
+          npm pkg set repository.directory="packages/main"
           npm pkg set name="$SCOPE/plexus"
           jq --arg scope "$SCOPE/" '.optionalDependencies |= with_entries(.key |= ($scope + .))' package.json > temp.json && mv temp.json package.json
-          npm publish --access public --provenance --registry https://registry.npmjs.org
+          npm publish --access public --provenance
 
       - name: Deploy to GitHub
         working-directory: packages/main
