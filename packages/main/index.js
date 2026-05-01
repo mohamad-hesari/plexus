@@ -12,14 +12,15 @@ if (platform === "linux" && fs.existsSync("/etc/alpine-release")) {
 }
 
 const baseName = `plexus-${pkgPlatform}-${arch}`;
-const scopedName = `@mohamad-hesari/${baseName}`;
+const githubName = `@mohamad-hesari/${baseName}`;
+const normalName = `@mhesari/${baseName}`;
 
 function findBinary() {
   try {
-    return require.resolve(`${scopedName}/bin/plexus`);
+    return require.resolve(`${githubName}/bin/plexus`);
   } catch (e) {
     try {
-      return require.resolve(`${baseName}/bin/plexus`);
+      return require.resolve(`${normalName}/bin/plexus`);
     } catch (e2) {
       return null;
     }
@@ -33,7 +34,7 @@ if (binaryPath) {
   child.on("exit", (code) => process.exit(code || 0));
 } else {
   console.error(
-    `Error: Plexus could not find binary package: ${baseName} or ${scopedName}`,
+    `Error: Plexus could not find binary package: ${baseName} or ${githubName}`,
   );
   process.exit(1);
 }
