@@ -39,7 +39,12 @@ jobs:
       - name: Sync Cargo.toml version
         shell: bash
         run: |
-          sed -i "s/^version = \".*\"/version = \"${{ env.VERSION }}\"/" Cargo.toml
+          node -e "
+            const fs = require('fs');
+            let content = fs.readFileSync('Cargo.toml', 'utf8');
+            content = content.replace(/^version = \".*\"/m, 'version = \"${{ env.VERSION }}\"');
+            fs.writeFileSync('Cargo.toml', content);
+          "
 
       - name: Build Binary
         run: cargo build --release --target ${{ matrix.target }}
