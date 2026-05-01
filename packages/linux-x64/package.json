@@ -1,6 +1,7 @@
 {
   "name": "plexus-linux-x64",
   "version": "1.0.0",
+  "license": "MIT",
   "os": [
     "linux"
   ],

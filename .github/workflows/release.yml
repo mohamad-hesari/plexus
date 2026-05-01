@@ -28,6 +28,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     defaults:
       run:
         shell: bash
@@ -68,6 +69,8 @@ jobs:
       - name: Prepare & Version Package
         shell: bash
         run: |
+          cp LICENSE packages/${{ matrix.pkg_name }}/
+          cp README.md packages/${{ matrix.pkg_name }}/ || true
           cd packages/${{ matrix.pkg_name }}
           jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
           mkdir -p bin
@@ -75,13 +78,9 @@ jobs:
 
       - name: Publish to NPM
         working-directory: packages/${{ matrix.pkg_name }}
-        env:
-          MY_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        if: ${{ env.MY_NPM_TOKEN != ' ' }}
         run: |
           npm pkg set name="@m.hesari/plexus-${{ matrix.pkg_name }}"
-          npm config set //registry.npmjs.org/:_authToken $MY_NPM_TOKEN
-          npm publish --access public --registry https://registry.npmjs.org
+          npm publish --access public --provenance --registry https://registry.npmjs.org
 
       - name: Deploy to GitHub
         working-directory: packages/${{ matrix.pkg_name }}
@@ -117,12 +116,11 @@ jobs:
       - name: Publish Main
         working-directory: packages/main
         env:
-          MY_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        if: ${{ env.MY_NPM_TOKEN != ' ' }}
+          SCOPE: "@m.hesari"
         run: |
-          npm pkg set name="@m.hesari/plexus"
-          npm config set //registry.npmjs.org/:_authToken $MY_NPM_TOKEN
-          npm publish --access public
+          npm pkg set name="$SCOPE/plexus"
+          jq --arg scope "$SCOPE/" '.optionalDependencies |= with_entries(.key |= ($scope + .))' package.json > temp.json && mv temp.json package.json
+          npm publish --access public --provenance --registry https://registry.npmjs.org
 
       - name: Deploy to GitHub
         working-directory: packages/main

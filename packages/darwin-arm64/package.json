@@ -1,6 +1,7 @@
 {
   "name": "plexus-darwin-arm64",
   "version": "1.0.0",
+  "license": "MIT",
   "os": [
     "darwin"
   ],
