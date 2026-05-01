@@ -54,10 +54,12 @@ jobs:
 
       - name: Publish to NPM
         working-directory: packages/${{ matrix.pkg_name }}
-        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          MY_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: ${{ env.MY_NPM_TOKEN != ' ' }}
         run: |
           npm pkg set name="plexus-${{ matrix.pkg_name }}"
-          npm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+          npm config set //registry.npmjs.org/:_authToken $MY_NPM_TOKEN
           npm publish --access public --registry https://registry.npmjs.org
 
       - name: Deploy to GitHub
@@ -87,9 +89,11 @@ jobs:
 
       - name: Publish Main
         working-directory: packages/main
-        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          MY_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        if: ${{ env.MY_NPM_TOKEN != ' ' }}
         run: |
-          npm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+          npm config set //registry.npmjs.org/:_authToken $MY_NPM_TOKEN
           npm publish --access public
 
       - name: Deploy to GitHub
