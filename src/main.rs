@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pnpm_task_tui::{
+use plexus::{
     app::App,
     cli::Cli,
     task_manager::TaskManager,
