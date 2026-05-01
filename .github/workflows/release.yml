@@ -128,8 +128,8 @@ jobs:
       - name: Version Main Package and Deps
         working-directory: packages/main
         run: |
-          cp LICENSE packages/main/
-          cp README.md packages/main/ || true
+          cp ../../LICENSE .
+          cp ../../README.md . || true
           # jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
           # jq ".optionalDependencies | map_values(\"${{ env.VERSION }}\")" package.json > deps.json
           # jq ".optionalDependencies = input" package.json deps.json > temp.json && mv temp.json package.json
