@@ -178,6 +178,17 @@ impl WatchManager for App {
                     (vec![], vec![])
                 };
 
+                let mut excludes = excludes.clone();
+
+                self.cli.watch_ignore.iter().for_each(|pat| {
+                    debug!(
+                        "Adding CLI watch ignore pattern for project {}: {}",
+                        project.name(),
+                        pat
+                    );
+                    excludes.push(pat.clone());
+                });
+
                 let task_name = Arc::new(project.name().to_string());
                 let glob_pattern = if !includes.is_empty() || !excludes.is_empty() {
                     Some(FileMatcher::new(

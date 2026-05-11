@@ -72,6 +72,13 @@ pub struct Cli {
     pub watch: bool,
 
     #[arg(
+        short = 'I',
+        long,
+        help = "Ignore files that match the glob pattern when watching for changes"
+    )]
+    pub watch_ignore: Vec<String>,
+
+    #[arg(
         short,
         long,
         default_value = "false",
