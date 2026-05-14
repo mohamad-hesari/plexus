@@ -80,6 +80,10 @@ impl TaskManager for App {
         debug!("init tasks");
         let mut pnpm_lock = self.pnpm.lock().await;
         pnpm_lock.load_projects(&self.cli.filter, 0).await;
+        println!(
+            "Loaded {} projects from pnpm-lock.yaml",
+            pnpm_lock.projects().len()
+        );
         let mut tasks = self.tasks.lock().await;
         let mut tasks_map = HashMap::new();
         for (name, project) in pnpm_lock.projects() {
@@ -110,6 +114,7 @@ impl TaskManager for App {
             }
         }
         self.state.add_tasks(tasks_map.clone()).await;
+        println!("Initialized {} tasks", tasks.len());
     }
 
     async fn start(&self) {
@@ -136,6 +141,7 @@ impl TaskManager for App {
         let aborts = Arc::clone(&self.aborts);
         let avaiable_tasks = self.tasks.lock().await.keys().cloned().collect::<Vec<_>>();
         let mut rx_status_changes = self.state.get_status_change_receiver();
+        let is_watching_flag = self.cli.watch;
         self.state
             .spawn(async move {
                 let mut all_started_once = false;
@@ -204,7 +210,11 @@ impl TaskManager for App {
                             if *task.status() == TaskStatus::Initialized {
                                 debug!(%task_name, "Task has not been started yet");
                                 all_started = false;
-                                break;
+                            } else if *task.status() == TaskStatus::Failed
+                                && !is_watching_flag 
+                            {
+                                debug!(%task_name, "Task has failed");
+                                panic!("Task {} failed, exiting", task_name);
                             }
                         }
 
@@ -215,17 +225,37 @@ impl TaskManager for App {
                     }
 
                     if all_started_once {
-                        loop {
+                        if is_watching_flag {
+                            loop {
+                                if rx_status_changes.changed().await.is_err() { break; }
 
-                            if rx_status_changes.changed().await.is_err() { break; }
+                                let is_quit = rx_status_changes
+                                    .borrow_and_update()
+                                    .as_ref() // Look inside the Option
+                                    .map(|s| *s == StatusChangeEvent::StatusChanged) // Check the enum
+                                    .unwrap_or(false); // If None, it's not a quit event
 
-                            let is_quit = rx_status_changes
-                                .borrow_and_update()
-                                .as_ref() // Look inside the Option
-                                .map(|s| *s == StatusChangeEvent::StatusChanged) // Check the enum
-                                .unwrap_or(false); // If None, it's not a quit event
-
-                            if is_quit { break; }
+                                if is_quit { break; }
+                            }
+                        } else {
+                            loop {
+                                let mut all_finished = true;
+                                for task_name in &tasks {
+                                    let task = state.get_task_state(task_name).await;
+                                    if *task.status() == TaskStatus::Running {
+                                        debug!(%task_name, "Task is still running, waiting...");
+                                        all_finished = false;
+                                    } else if *task.status() == TaskStatus::Failed {
+                                        debug!(%task_name, "Task has failed");
+                                        panic!("Task {} failed, exiting", task_name);
+                                    }
+                                }
+                                if all_finished {
+                                    debug!("All tasks finished, exiting task manager loop");
+                                    emit!(StateEvent::Quit);
+                                    return;
+                                }
+                            }
                         }
                     } else {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -288,12 +318,44 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
     debug!(%task_name_thread, "Spawning task");
     async move {
         let task_name = Arc::clone(&task_name_thread);
+        // let stdout_tmp = NamedTempFile::new().unwrap_or_else(|_| {
+        //     panic!(
+        //         "Failed to create temp file for stdout of task {}",
+        //         task_name
+        //     )
+        // });
+        // let stderr_tmp = NamedTempFile::new().unwrap_or_else(|_| {
+        //     panic!(
+        //         "Failed to create temp file for stderr of task {}",
+        //         task_name
+        //     )
+        // });
+        //
+        // let stdout_path = stdout_tmp.path().to_path_buf();
+        // let stdout_file = stdout_tmp.reopen().unwrap_or_else(|_| {
+        //     panic!(
+        //         "Failed to reopen temp file for stdout of task {}",
+        //         task_name
+        //     )
+        // });
+        // let stderr_file = stderr_tmp.reopen().unwrap_or_else(|_| {
+        //     panic!(
+        //         "Failed to reopen temp file for stderr of task {}",
+        //         task_name
+        //     )
+        // });
         let envs = get_envs(&task.path).await;
         let mut child = tokio::process::Command::new("pnpm")
             .arg("--filter")
             .arg(&task.name)
             .arg(&task.command)
             .envs(&envs)
+            .env("NO_COLOR", "1")
+            .env("TERM", "dumb")
+            .env("FORCE_COLOR", "0")
+            // .stdout(stdout_file)
+            // .stderr(stderr_file)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
@@ -308,11 +370,117 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
 
         debug!(%task_name, "Process started for task");
 
+        // let (tx, rx) = std::sync::mpsc::channel();
+        // // let mut watcher = RecommendedWatcher::new(tx, Config::default())?;
+        // // watcher.watch(&stdout_path, RecursiveMode::NonRecursive)?;
+        // let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        //     if let Ok(event) = res
+        //         && event.kind.is_modify()
+        //     {
+        //         let _ = tx.send(());
+        //     }
+        // })
+        // .unwrap_or_else(|_| panic!("Failed to create file watcher for task {}", task_name));
+        // watcher
+        //     .watch(&stdout_path, RecursiveMode::NonRecursive)
+        //     .unwrap_or_else(|_| panic!("Failed to watch stdout file for task {}", task_name));
+        // let task_name_thread = task_name.to_string();
+        //
+        // tokio::spawn(async move {
+        //     let mut last_pos = 0;
+        //     let mut file = File::open(&stdout_path).expect("Failed to open log");
+        //
+        //     for _ in rx {
+        //         // Check file size and read new data
+        //         if let Ok(metadata) = file.metadata() {
+        //             let len = metadata.len();
+        //             if len > last_pos {
+        //                 let _ = file.seek(SeekFrom::Start(last_pos));
+        //                 let mut buffer = vec![0; (len - last_pos) as usize];
+        //                 let _ = file.read_exact(&mut buffer);
+        //
+        //                 let output = String::from_utf8_lossy(&buffer);
+        //
+        //                 emit!(StateEvent::Output {
+        //                     task_name: task_name_thread.to_string(),
+        //                     output: format!("[OUT]: {}", output),
+        //                 });
+        //
+        //                 last_pos = len;
+        //             } else if len < last_pos {
+        //                 // Handle file truncation (clear screen)
+        //                 last_pos = 0;
+        //                 let _ = file.seek(SeekFrom::Start(0));
+        //             }
+        //         }
+        //     }
+        // });
+        //
+        // let status = child
+        //     .wait()
+        //     .await
+        //     .unwrap_or_else(|_| panic!("Failed to wait for task {}", task_name));
+        // debug!("Vite exited with status: {}", status);
+
+        // let mut stdout = child.inner().stdout.take().expect("no stdout");
+        // let mut stderr = child.inner().stderr.take().expect("no stderr");
+        //
+        // let mut rx = task.rx.write().await;
+        //
+        // let mut stdout_buf = [0u8; 4096];
+        // let mut stderr_buf = [0u8; 4096];
+        //
+        // loop {
+        //     if !App::instance().state.is_running() {
+        //         let _ = child.kill().await;
+        //         break;
+        //     }
+        //
+        //     tokio::select! {
+        //         // 1. High priority: Stop signal
+        //         _ = rx.recv() => {
+        //             let _ = child.kill().await;
+        //             break;
+        //         }
+        //
+        //         // 2. Read RAW bytes from stdout
+        //         n = stdout.read(&mut stdout_buf) => {
+        //             match n {
+        //                 Ok(0) => break, // Stream closed
+        //                 Ok(len) => {
+        //                     let output = String::from_utf8_lossy(&stdout_buf[..len]);
+        //                     // We use lossy to handle partial ANSI codes safely
+        //                     emit!(StateEvent::Output{
+        //                         task_name: task_name.to_string(),
+        //                         output: format!("[OUT]: {}", output),
+        //                     });
+        //                 }
+        //                 Err(_) => break,
+        //             }
+        //         }
+        //
+        //         // 3. Read RAW bytes from stderr
+        //         n = stderr.read(&mut stderr_buf) => {
+        //             if let Ok(len) = n {
+        //                 if len == 0 { break; }
+        //                 let output = String::from_utf8_lossy(&stderr_buf[..len]);
+        //                 emit!(StateEvent::Output{
+        //                     task_name: task_name.to_string(),
+        //                     output: format!("[ERR]: {}", output),
+        //                 });
+        //             }
+        //         }
+        //         _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+        //             tokio::task::yield_now().await;
+        //         }
+        //     }
+        // }
+
         let stdout = child.inner().stdout.take().expect("no stdout");
         let stderr = child.inner().stderr.take().expect("no stderr");
-
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
+
         let mut rx = task.rx.write().await;
 
         loop {

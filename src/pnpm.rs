@@ -1,7 +1,13 @@
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{self, BufReader, Read};
+use std::path::PathBuf;
 use std::{collections::HashMap, path::Path};
 use tokio::{fs, process::Command};
+use tracing::debug;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     _name: String,
     _path: String,
@@ -56,6 +62,39 @@ impl Pnpm {
 
     #[async_recursion::async_recursion]
     pub async fn load_projects(&mut self, projects: &[String], counter: usize) {
+        if counter == 0 {
+            match get_file_sha256("pnpm-lock.yaml") {
+                Ok(hash) => {
+                    debug!("pnpm-lock.yaml hash: {}", hash);
+                    let mut final_vec = projects.to_vec();
+                    final_vec.push(hash);
+                    let project_hash = hash_vec_strings(final_vec);
+                    let mut path = PathBuf::from("node_modules");
+                    path.push(".plexus");
+                    path.push(project_hash);
+                    if path.exists() {
+                        debug!(
+                            "Cache hit for pnpm projects, loading from {}",
+                            path.display()
+                        );
+                        match fs::read_to_string(&path).await {
+                            Ok(contents) => {
+                                let cached_projects: Vec<Project> = serde_json::from_str(&contents)
+                                    .expect("Failed to parse cached projects");
+                                for project in cached_projects {
+                                    self._projects.insert(project.name().to_string(), project);
+                                }
+                                return;
+                            }
+                            Err(e) => eprintln!("Error reading cache file: {}", e),
+                        }
+                    } else {
+                        debug!("Cache miss for pnpm projects, will load from pnpm list");
+                    }
+                }
+                Err(e) => eprintln!("Error reading file: {}", e),
+            }
+        }
         if counter > 10 {
             eprintln!("Too many recursive calls to load_projects, possible circular dependency");
             return;
@@ -63,7 +102,7 @@ impl Pnpm {
         let output = Command::new("pnpm")
             .arg("list")
             .arg("--json")
-            .arg("--depth=0")
+            .arg("--depth=4")
             .arg("--long")
             .args(projects.iter().flat_map(|f| vec!["--filter", f]))
             .output()
@@ -103,6 +142,29 @@ impl Pnpm {
                 self.load_projects(&not_found_deps, counter + 1).await;
             }
         }
+
+        if counter == 0 {
+            // Cache the loaded projects
+            let projects_vec: Vec<Project> = self._projects.values().cloned().collect();
+            let cache_path = PathBuf::from("node_modules")
+                .join(".plexus")
+                .join(hash_vec_strings(
+                    [
+                        projects.to_vec(),
+                        vec![get_file_sha256("pnpm-lock.yaml").unwrap_or_default()],
+                    ]
+                    .concat(),
+                ));
+            if let Some(parent) = cache_path.parent() {
+                fs::create_dir_all(parent)
+                    .await
+                    .expect("Failed to create cache directory");
+            }
+            match fs::write(&cache_path, serde_json::to_string(&projects_vec).unwrap()).await {
+                Ok(_) => debug!("Cached pnpm projects to {}", cache_path.display()),
+                Err(e) => eprintln!("Error writing cache file: {}", e),
+            }
+        }
     }
 
     fn add_deps(&mut self, json: &serde_json::Value, dep_name: &str, deps: &mut Vec<String>) {
@@ -124,4 +186,34 @@ impl Pnpm {
     pub fn projects(&self) -> &HashMap<String, Project> {
         &self._projects
     }
+}
+
+fn get_file_sha256(path: &str) -> io::Result<String> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192]; // 8KB chunks
+
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+
+    let result = hasher.finalize();
+    Ok(hex::encode(result))
+}
+
+fn hash_vec_strings(strings: Vec<String>) -> String {
+    let mut hasher = Sha256::new();
+
+    for s in strings {
+        hasher.update(s.as_bytes());
+        // Optional: hasher.update(b"\n"); // Add delimiter for safety
+    }
+
+    let result = hasher.finalize();
+    hex::encode(result)
 }

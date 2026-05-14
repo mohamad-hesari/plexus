@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing::info;
 
 use plexus::{
     app::App,
@@ -60,13 +61,17 @@ pub fn init_tracing(cli: Arc<Cli>) -> Option<WorkerGuard> {
 #[tokio::main]
 async fn main() {
     let _tracing_guard = init_tracing(Arc::clone(&App::instance().cli));
+    info!("Starting Plexus...");
     App::instance().initialize().await;
     App::instance().start().await;
+    info!("Plexus is running. Press Ctrl+C to exit.");
     if App::instance().cli.watch {
         App::instance().watch().await;
     }
+    info!("Plexus is starting the TUI...");
     if App::instance().cli.tui {
         App::instance().start_tui().await;
     }
+    info!("Plexus is waiting for tasks to complete...");
     App::instance().state.wait_for_all().await;
 }

@@ -7,7 +7,10 @@ use clap::Parser;
 use globset::GlobSet;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{app_state::AppState, cli::Cli, pnpm::Pnpm, task_manager::TaskManager};
+use crate::{
+    app_state::AppState, cli::Cli, pnpm::Pnpm, task_manager::TaskManager,
+    watch_manager::WatchManager,
+};
 
 pub struct AppTask {
     pub name: String,
@@ -37,12 +40,15 @@ pub struct FileMatcher {
     pub project_root: String,
 }
 
+pub struct ActualWatcher {
+    pub watcher: notify::RecommendedWatcher,
+    pub rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<notify::Event>>>,
+}
+
 pub struct AppWatcher {
     pub name: String,
     pub path: String,
     pub glob_set: Option<FileMatcher>,
-    pub rx: Arc<Mutex<tokio::sync::mpsc::UnboundedReceiver<notify::Event>>>,
-    pub watcher: Arc<Mutex<notify::RecommendedWatcher>>,
 }
 
 pub struct App {
@@ -52,7 +58,7 @@ pub struct App {
     pub tasks: Arc<Mutex<HashMap<String, Arc<AppTask>>>>,
     pub aborts: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
     pub watchers: Arc<RwLock<Vec<AppWatcher>>>,
-    // pub queue: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send>>,
+    pub watcher: Arc<Mutex<Option<ActualWatcher>>>,
 }
 
 impl App {
@@ -74,6 +80,7 @@ impl App {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             aborts: Arc::new(Mutex::new(HashMap::new())),
             watchers: Arc::new(RwLock::new(vec![])),
+            watcher: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -83,6 +90,9 @@ impl App {
     }
 
     pub async fn initialize(&self) {
+        let mut watcher = self.watcher.lock().await;
+        let new_watcher = self.initialize_watcher().await;
+        *watcher = Some(new_watcher);
         self.init_tasks().await;
     }
 }
