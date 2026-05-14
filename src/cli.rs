@@ -50,6 +50,13 @@ pub struct Cli {
     pub log_console: bool,
 
     #[arg(
+        short = 'D',
+        long = "compact",
+        help = "Use compact logging format (HH:mm:ss) instead of the default format (YYYY-MM-DD HH:mm:ss)"
+    )]
+    pub compact: bool,
+
+    #[arg(
         short,
         long,
         help = "Filter tasks to run, only tasks that match the filter will be run"

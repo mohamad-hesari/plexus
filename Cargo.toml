@@ -36,9 +36,15 @@ notify = "8.2.0"
 globset = "0.4.18"
 regex = "1.12.3"
 scopeguard = "1.2.0"
-tracing = { version = "0.1" }
 # tracing = { version = "0.1", features = ["release_max_level_info"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+  "fmt",
+  "chrono",
+  "local-time",
+] }
+time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
 tracing-appender = "0.2"
 command-group = { version = "5.0", features = ["with-tokio"] }
 sha2 = "0.11"

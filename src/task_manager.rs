@@ -8,7 +8,7 @@ use tokio::{
     fs,
     io::{AsyncBufReadExt, BufReader},
 };
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::{
     app::{App, AppTask},
@@ -153,7 +153,7 @@ impl TaskManager for App {
                     for task_name in &tasks {
                         let task = state.get_task_state(task_name).await;
                         let (project_name, command) = task.name().split_once(':').unwrap();
-                        debug!(%task_name, %project_name, %command, status = ?task.status(), "Checking task");
+                        trace!(%task_name, %project_name, %command, status = ?task.status(), "Checking task");
                         if *task.status() == TaskStatus::Initialized {
                             let deps = {
                                 let pnpm_lock = pnpm.lock().await;
@@ -208,14 +208,14 @@ impl TaskManager for App {
                         for task_name in &tasks {
                             let task = state.get_task_state(task_name).await;
                             if *task.status() == TaskStatus::Initialized {
-                                debug!(%task_name, "Task has not been started yet");
+                                trace!(%task_name, "Task has not been started yet");
                                 all_started = false;
                             } else if *task.status() == TaskStatus::Failed
                                 && !is_watching_flag 
                             {
                                 debug!(%task_name, "Task has failed");
                                     emit!(StateEvent::Failed);
-                                panic!("Task {} failed, exiting", task_name);
+                                return;
                             }
                         }
 
@@ -247,7 +247,7 @@ impl TaskManager for App {
                                         all_finished = false;
                                     } else if *task.status() == TaskStatus::Failed {
                                         emit!(StateEvent::Failed);
-                                        panic!("Task {} failed, exiting", task_name);
+                                        return;
                                     }
                                 }
                                 if all_finished {
@@ -503,7 +503,7 @@ fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> +
                                 task_name: task_name.to_string(),
                                 output: format!("[OUT]: {}", l.clone()),
                             });
-                            // tokio::task::yield_now().await;
+                            debug!(%task_name, stdout = %l);
                         }
                         Ok(Some(_)) => {
                             // tokio::task::yield_now().await;

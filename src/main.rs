@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use time::macros::format_description;
 use tracing::info;
+use tracing_subscriber::fmt::time::UtcTime; // Or LocalTime
 
 use plexus::{
     app::App,
@@ -32,18 +34,33 @@ pub fn init_tracing(cli: Arc<Cli>) -> (Option<WorkerGuard>, Option<WorkerGuard>)
     // } else {
     //     None
     // };
+
     let (console_layer, _console_guard) = if cli.log_console {
-        // Force stdout to be non-blocking/auto-flushing
-        let (non_blocking_stdout, guard) = tracing_appender::non_blocking(std::io::stdout());
-        (
-            Some(
-                fmt::layer()
-                    .with_writer(non_blocking_stdout)
-                    .with_target(true)
-                    .with_thread_ids(true),
-            ),
-            Some(guard),
-        )
+        let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+        let layer = fmt::layer().with_writer(writer).with_ansi(false);
+        if cli.compact {
+            let description = format_description!("[hour]:[minute]:[second]");
+            let timer = UtcTime::new(description);
+            (
+                Some(
+                    layer
+                        .compact() // Use compact style
+                        .with_timer(timer) // Use HH:mm:ss
+                        .with_target(false) // Remove module path for cleanliness
+                        .boxed(),
+                ),
+                Some(guard),
+            )
+        } else {
+            (
+                Some(
+                    layer
+                        .with_target(true) // Keep full module path
+                        .boxed(),
+                ),
+                Some(guard),
+            )
+        }
     } else {
         (None, None)
     };
@@ -79,12 +96,12 @@ async fn main() {
     info!("Starting Plexus...");
     App::instance().initialize().await;
     App::instance().start().await;
-    info!("Plexus is running. Press Ctrl+C to exit.");
     if App::instance().cli.watch {
+        info!("Plexus is running. Press Ctrl+C to exit.");
         App::instance().watch().await;
     }
-    info!("Plexus is starting the TUI...");
     if App::instance().cli.tui {
+        info!("Plexus is starting the TUI...");
         App::instance().start_tui().await;
     }
     info!("Plexus is waiting for tasks to complete...");

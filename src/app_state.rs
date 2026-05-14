@@ -70,6 +70,13 @@ pub enum StateEvent {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitEvent {
+    None,
+    Normal,
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StatusChangeEvent {
     StatusChanged,
@@ -79,8 +86,8 @@ pub struct AppState {
     _state: RwLock<State>,
     _handles: Arc<Mutex<JoinSet<()>>>,
     _status_changed: Arc<AtomicBool>,
-    _sender: tokio::sync::watch::Sender<bool>,
-    _receiver: tokio::sync::watch::Receiver<bool>,
+    _sender: tokio::sync::watch::Sender<QuitEvent>,
+    _receiver: tokio::sync::watch::Receiver<QuitEvent>,
     _status_change: (
         tokio::sync::watch::Sender<Option<StatusChangeEvent>>,
         tokio::sync::watch::Receiver<Option<StatusChangeEvent>>,
@@ -91,7 +98,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let (tx, rx) = watch::channel(true);
+        let (tx, rx) = watch::channel(QuitEvent::None);
         AppState {
             _state: RwLock::new(State {
                 // _running: true,
@@ -204,7 +211,7 @@ impl AppState {
                 info!("A task failed, quitting application");
                 self._running
                     .store(false, std::sync::atomic::Ordering::Relaxed);
-                let _ = self._sender.send(false);
+                let _ = self._sender.send(QuitEvent::Failed);
                 self._status_change
                     .0
                     .send(Some(StatusChangeEvent::StatusChanged))
@@ -214,7 +221,7 @@ impl AppState {
                 info!("Quitting application");
                 self._running
                     .store(false, std::sync::atomic::Ordering::Relaxed);
-                let _ = self._sender.send(true);
+                let _ = self._sender.send(QuitEvent::Normal);
                 self._status_change
                     .0
                     .send(Some(StatusChangeEvent::StatusChanged))
@@ -328,32 +335,31 @@ impl AppState {
         .await;
         let mut rx = self._receiver.clone();
 
-        while *rx.borrow_and_update() {
-            if rx.changed().await.is_err() {
-                break;
-            }
-        }
+        // while *rx.borrow_and_update() {
+        //     if rx.changed().await.is_err() {
+        //         break;
+        //     }
+        // }
         let mut failed = false;
         loop {
             // 1. Get the current value from the channel
             let current_value = *rx.borrow_and_update();
 
             // 2. If the value is false, we exit normally (Success)
-            if !current_value {
-                info!("Received stop signal (false). Exiting normally...");
+            if current_value != QuitEvent::None {
+                info!(
+                    "Received stop signal ({:?}). Exiting normally...",
+                    current_value
+                );
+                failed = current_value == QuitEvent::Failed;
                 break;
             }
 
             // 3. Wait for the next change
             if rx.changed().await.is_err() {
-                // If the sender was dropped, consider how you want to exit.
-                // Usually, a dropped sender during a watch implies a failure or abrupt stop.
-                info!("Sender dropped. Exiting with failure.");
-                failed = true;
+                info!("Channel closed. Exiting...");
+                break;
             }
-
-            // After changed().await returns Ok(()), the loop repeats,
-            // borrows the new value, and checks the 'false' condition again.
         }
 
         let clone_handles = Arc::clone(&self._handles);

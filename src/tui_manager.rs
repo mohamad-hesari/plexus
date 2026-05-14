@@ -431,6 +431,10 @@ async fn handle_key_event(key_event: event::KeyEvent, state: Arc<RwLock<TuiState
             emit!(StateEvent::Quit);
             false
         }
+        KeyCode::Char('x') => {
+            emit!(StateEvent::Failed);
+            false
+        }
         KeyCode::Char('l') => {
             let mut state = state.write().await;
             state.show_log = !state.show_log;
