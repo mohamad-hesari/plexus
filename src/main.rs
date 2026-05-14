@@ -11,7 +11,7 @@ use plexus::{
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-pub fn init_tracing(cli: Arc<Cli>) -> Option<WorkerGuard> {
+pub fn init_tracing(cli: Arc<Cli>) -> (Option<WorkerGuard>, Option<WorkerGuard>) {
     // let console_layer_tokio = console_subscriber::ConsoleLayer::builder()
     //     .server_addr(([127, 0, 0, 1], 6670)) // Use 6670 instead of 6669
     //     .spawn();
@@ -22,15 +22,30 @@ pub fn init_tracing(cli: Arc<Cli>) -> Option<WorkerGuard> {
         None
     };
 
-    let console_layer = if cli.log_console {
-        Some(
-            fmt::layer()
-                .with_writer(std::io::stdout)
-                .with_target(true)
-                .with_thread_ids(true),
+    // let console_layer = if cli.log_console {
+    //     Some(
+    //         fmt::layer()
+    //             .with_writer(std::io::stdout)
+    //             .with_target(true)
+    //             .with_thread_ids(true),
+    //     )
+    // } else {
+    //     None
+    // };
+    let (console_layer, _console_guard) = if cli.log_console {
+        // Force stdout to be non-blocking/auto-flushing
+        let (non_blocking_stdout, guard) = tracing_appender::non_blocking(std::io::stdout());
+        (
+            Some(
+                fmt::layer()
+                    .with_writer(non_blocking_stdout)
+                    .with_target(true)
+                    .with_thread_ids(true),
+            ),
+            Some(guard),
         )
     } else {
-        None
+        (None, None)
     };
 
     let (file_layer, _guard) = if let Some(log_file) = &cli.log_file {
@@ -55,12 +70,12 @@ pub fn init_tracing(cli: Arc<Cli>) -> Option<WorkerGuard> {
         .with(file_layer)
         .init();
 
-    _guard
+    (_console_guard, _guard)
 }
 
 #[tokio::main]
 async fn main() {
-    let _tracing_guard = init_tracing(Arc::clone(&App::instance().cli));
+    let (g1, g2) = init_tracing(Arc::clone(&App::instance().cli));
     info!("Starting Plexus...");
     App::instance().initialize().await;
     App::instance().start().await;
@@ -73,5 +88,12 @@ async fn main() {
         App::instance().start_tui().await;
     }
     info!("Plexus is waiting for tasks to complete...");
-    App::instance().state.wait_for_all().await;
+    let failed = App::instance().state.wait_for_all().await;
+
+    drop(g1);
+    drop(g2);
+
+    if failed {
+        std::process::exit(1);
+    }
 }

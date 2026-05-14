@@ -67,6 +67,7 @@ pub enum StateEvent {
         task_name: String,
     },
     Quit,
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,11 +200,21 @@ impl AppState {
                     .send(Some(StatusChangeEvent::StatusChanged))
                     .expect("Failed to send status change");
             }
+            StateEvent::Failed => {
+                info!("A task failed, quitting application");
+                self._running
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                let _ = self._sender.send(false);
+                self._status_change
+                    .0
+                    .send(Some(StatusChangeEvent::StatusChanged))
+                    .expect("Failed to send status change");
+            }
             StateEvent::Quit => {
                 info!("Quitting application");
                 self._running
                     .store(false, std::sync::atomic::Ordering::Relaxed);
-                let _ = self._sender.send(false);
+                let _ = self._sender.send(true);
                 self._status_change
                     .0
                     .send(Some(StatusChangeEvent::StatusChanged))
@@ -307,7 +318,7 @@ impl AppState {
     //     result
     // }
 
-    pub async fn wait_for_all(&self) {
+    pub async fn wait_for_all(&self) -> bool {
         self.spawn(async {
             tokio::signal::ctrl_c()
                 .await
@@ -321,6 +332,28 @@ impl AppState {
             if rx.changed().await.is_err() {
                 break;
             }
+        }
+        let mut failed = false;
+        loop {
+            // 1. Get the current value from the channel
+            let current_value = *rx.borrow_and_update();
+
+            // 2. If the value is false, we exit normally (Success)
+            if !current_value {
+                info!("Received stop signal (false). Exiting normally...");
+                break;
+            }
+
+            // 3. Wait for the next change
+            if rx.changed().await.is_err() {
+                // If the sender was dropped, consider how you want to exit.
+                // Usually, a dropped sender during a watch implies a failure or abrupt stop.
+                info!("Sender dropped. Exiting with failure.");
+                failed = true;
+            }
+
+            // After changed().await returns Ok(()), the loop repeats,
+            // borrows the new value, and checks the 'false' condition again.
         }
 
         let clone_handles = Arc::clone(&self._handles);
@@ -345,6 +378,7 @@ impl AppState {
         };
         let mut handles = self._handles.lock().await;
         handles.abort_all();
+        failed
     }
 }
 

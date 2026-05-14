@@ -214,6 +214,7 @@ impl TaskManager for App {
                                 && !is_watching_flag 
                             {
                                 debug!(%task_name, "Task has failed");
+                                    emit!(StateEvent::Failed);
                                 panic!("Task {} failed, exiting", task_name);
                             }
                         }
@@ -243,10 +244,9 @@ impl TaskManager for App {
                                 for task_name in &tasks {
                                     let task = state.get_task_state(task_name).await;
                                     if *task.status() == TaskStatus::Running {
-                                        debug!(%task_name, "Task is still running, waiting...");
                                         all_finished = false;
                                     } else if *task.status() == TaskStatus::Failed {
-                                        debug!(%task_name, "Task has failed");
+                                        emit!(StateEvent::Failed);
                                         panic!("Task {} failed, exiting", task_name);
                                     }
                                 }
