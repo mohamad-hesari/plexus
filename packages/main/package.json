@@ -5,6 +5,9 @@
   "bin": {
     "plexus": "./index.js"
   },
+  "scripts": {
+    "postinstall": "node ./postinstall.js"
+  },
   "optionalDependencies": {
     "plexus-linux-x64": "1.0.0",
     "plexus-linux-musl-x64": "1.0.0",
