@@ -4,16 +4,18 @@ use std::{
   sync::Arc,
 };
 
+use chrono::{DateTime, TimeDelta, Utc};
 use tokio::{
   io::{AsyncBufReadExt, BufReader},
   process::Command,
+  task::JoinSet,
   time::Instant,
 };
 
 use command_group::AsyncCommandGroup;
 use std::{
   fmt::Display,
-  sync::atomic::{AtomicBool, AtomicI8, Ordering},
+  sync::atomic::{AtomicBool, Ordering},
   time::Duration,
 };
 
@@ -26,7 +28,7 @@ use tokio::{
   task::yield_now,
   time::{interval, sleep},
 };
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
   config::{Config, ConfigCommand, OptionConfig},
@@ -69,8 +71,8 @@ pub struct TaskManager {
   _watch_data_list: Arc<RwLock<Vec<TaskManagerWatchData>>>,
   _rx: Arc<RwLock<UnboundedReceiver<TaskManagerEvent>>>,
   _sx: Arc<RwLock<UnboundedSender<TaskManagerEvent>>>,
-  _counter: Arc<AtomicI8>,
   _build_depends_on: bool,
+  _is_loading: Arc<AtomicBool>,
 }
 
 impl TaskManager {
@@ -83,8 +85,8 @@ impl TaskManager {
       _watch_data_list: Arc::new(RwLock::new(Vec::new())),
       _rx: Arc::new(RwLock::new(rx)),
       _sx: Arc::new(RwLock::new(sx)),
-      _counter: Arc::new(AtomicI8::new(0)),
       _build_depends_on: build_depends_on,
+      _is_loading: Arc::new(AtomicBool::new(true)),
     }
   }
 
@@ -100,6 +102,68 @@ impl TaskManager {
   pub async fn get_envent_sender(&self) -> Arc<UnboundedSender<TaskManagerEvent>> {
     let sx = self._sx.read().await;
     Arc::new(sx.clone())
+  }
+
+  pub async fn is_loading(&self) -> bool {
+    self._is_loading.load(Ordering::Relaxed)
+  }
+
+  pub async fn stop_command(&self, task_id: &str, command_id: &str, force: bool) -> bool {
+    let task = self._store.get_task(task_id).await;
+    let command = task._commands.get(command_id).unwrap_or_else(|| {
+      panic!(
+        "Trying to stop non-existing command with id: {} for task with id: {}",
+        command_id, task_id
+      )
+    });
+
+    if force || command._status.is_running() || command._status.is_starting() {
+      self._store.set_status(command_id, TaskStatus::Stopping).await;
+      let start_time = Instant::now();
+      loop {
+        let status = self._store.get_status(command_id).await;
+        if status.is_stopped() {
+          info!(
+            name = task._name,
+            stdout = format!("Command {} is stopped", command._command)
+          );
+          return true;
+        }
+        sleep(Duration::from_millis(50)).await;
+        if start_time.elapsed() > Duration::from_secs(5) {
+          warn!(
+            name = task._name,
+            stdout = format!("Timeout while waiting for command {} to stop", command._command)
+          );
+          break;
+        }
+      }
+    }
+    false
+  }
+
+  pub async fn start_command(&self, task_id: &str, command_id: &str, force: bool) -> bool {
+    let task = self._store.get_task(task_id).await;
+    let command = task._commands.get(command_id).unwrap_or_else(|| {
+      panic!(
+        "Trying to start non-existing command with id: {} for task with id: {}",
+        command_id, task_id
+      )
+    });
+
+    if force || command._status.is_init() || command._status.is_finished() {
+      self._store.set_status(command_id, TaskStatus::Init).await;
+    }
+    false
+  }
+
+  pub async fn restart_command(&self, task_id: &str, command_id: &str, force: bool) {
+    let _ = self.stop_command(task_id, command_id, force).await;
+    self.start_command(task_id, command_id, force).await;
+  }
+
+  pub fn get_store(&self) -> Arc<TaskStore> {
+    Arc::clone(&self._store)
   }
 
   pub async fn file_changed(&self, _task_id: &str, paths: Vec<PathBuf>) {
@@ -318,6 +382,7 @@ impl TaskManager {
       "Finished loading tasks, total tasks count: {}",
       self._store.get_all_tasks().await.len()
     );
+    self._is_loading.store(false, Ordering::Relaxed);
   }
 
   pub async fn main_loop(&self, _watch_mode: bool, sequential: i8) -> bool {
@@ -325,7 +390,7 @@ impl TaskManager {
     let mut last_log_time = Instant::now();
     let log_interval = Duration::from_secs(5);
     let start_time = Instant::now();
-    let counter = Arc::new(AtomicI8::new(0));
+    let mut tasks_set = JoinSet::new();
     loop {
       if !self._is_running.load(Ordering::Relaxed) {
         info!("App is not running, exiting main loop");
@@ -356,7 +421,7 @@ impl TaskManager {
       }
 
       if last_log_time.elapsed() >= log_interval {
-        trace!(
+        info!(
           name = "TaskManager",
           stdout = format!("Current task statuses: \n{}", {
             let tasks = self._store.get_all_tasks().await;
@@ -370,8 +435,7 @@ impl TaskManager {
               }
             }
             status_report.push_str(&format!(
-              "Counter: {}, Watch mode: {}, watch mode env: {}, is all runing or finished: {}\n",
-              self._counter.load(Ordering::Relaxed),
+              "Watch mode: {}, watch mode env: {}, is all runing or finished: {}\n",
               self._is_watch_mode.load(Ordering::Relaxed),
               _watch_mode,
               self._store.is_all_running_or_finished().await
@@ -381,7 +445,7 @@ impl TaskManager {
               "start time elapsed: {:.2}s, is_watch_mode: {}, is_all_not_init: {}",
               start_time.elapsed().as_secs_f32(),
               self._is_watch_mode.load(Ordering::Relaxed),
-              self._store.is_all_not_init().await
+              self._store.is_all_not_init().await,
             ));
             status_report
           })
@@ -397,15 +461,12 @@ impl TaskManager {
         let is_running = Arc::clone(&self._is_running);
         let cmd_id = cmd._id.clone();
         self._store.set_status(&cmd_id, TaskStatus::Starting).await;
-        counter.fetch_add(1, Ordering::Relaxed);
-        let counter_cloned = Arc::clone(&counter);
-        _ = tokio::spawn(async move {
+        tasks_set.spawn(async move {
           yield_now().await;
           let timer = Instant::now();
           let name = cmd._name.clone();
           let task_runnder = TaskRunner::new(store, is_running);
           task_runnder.run_command(cmd).await;
-          counter_cloned.fetch_sub(1, Ordering::Relaxed);
           info!(
             name = name,
             stdout = format!(
@@ -421,15 +482,20 @@ impl TaskManager {
       yield_now().await;
     }
     self._is_running.store(false, Ordering::Relaxed);
-    loop {
-      let counter = self._counter.load(Ordering::Relaxed);
-      if counter <= 0 {
-        break;
+    if !tasks_set.is_empty() {
+      debug!("Waiting for all running tasks to finish...");
+      while let Some(res) = tasks_set.join_next().await {
+        match res {
+          Ok(_) => {
+            debug!("A task finished successfully");
+          }
+          Err(e) => {
+            error!(error = ?e, "A task panicked");
+          }
+        }
       }
-      sleep(Duration::from_millis(50)).await;
-      yield_now().await;
     }
-    debug!("All threads finished, exiting main loop");
+    debug!("All threads finished, exiting main loop",);
     return result;
   }
 }
@@ -508,12 +574,20 @@ impl TaskRunner {
     let stderr = child.inner().stderr.take().expect("no stderr");
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
-    let mut ticker = interval(Duration::from_millis(500));
+    let mut ticker = interval(Duration::from_secs(5));
+    let mut killing = false;
     loop {
       if !is_running.load(Ordering::Relaxed) {
         debug!(%task_name, "App is not running, killing process");
         let _ = child.kill().await;
         break;
+      }
+      if !killing && store.get_status(&cmd_id).await.is_stopping() {
+        debug!(%task_name, "Task is stopping, killing process");
+        child
+          .start_kill()
+          .unwrap_or_else(|_| debug!(%task_name, "Failed to send kill signal to process"));
+        killing = true;
       }
       tokio_select!(
         biased,
@@ -544,6 +618,9 @@ impl TaskRunner {
           .. if let _ = ticker.tick() => {
             let is_running = is_running.load(Ordering::Relaxed);
             trace!(%task_name, "Ticker ticked, checking if process is still alive {}",is_running);
+            yield_now().await;
+          }
+          .. if let _ = sleep(Duration::from_millis(50)) => {
             yield_now().await;
           }
           .. if let _ = tokio::signal::ctrl_c() => {
@@ -580,6 +657,10 @@ impl TaskRunner {
         }
       }
     );
+    if killing {
+      debug!(%task_name, "Process was killed, setting status to Failed");
+      finished_status = TaskStatus::Stopped;
+    }
     debug!(%cmd_id, %task_name, status = ?finished_status, "Finished running task");
     self._store.set_status(&cmd_id, finished_status.clone()).await;
     // finished_status.clone()
@@ -797,6 +878,9 @@ impl TaskStore {
       if found {
         break;
       }
+      if status.is_running() {
+        task.last_run_time = Utc::now();
+      }
       for cmd in task._commands.values_mut() {
         if cmd._id == id {
           cmd._status = status.clone();
@@ -810,6 +894,14 @@ impl TaskStore {
     statuses.insert(id.to_string(), status.clone());
     drop(statuses);
     drop(tasks);
+  }
+
+  pub async fn get_status(&self, id: &str) -> TaskStatus {
+    let statuses = self._statuses.read().await;
+    statuses
+      .get(id)
+      .unwrap_or_else(|| panic!("Trying to get status of non-existing command with id: {}", id))
+      .clone()
   }
 
   pub async fn add_log(&self, id: &str, log: String) {
@@ -872,9 +964,9 @@ impl PartialEq<String> for TaskCommandType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCommand {
-  _id: String,
-  _command: TaskCommandType,
-  _status: TaskStatus,
+  pub _id: String,
+  pub _command: TaskCommandType,
+  pub _status: TaskStatus,
 }
 
 impl PartialEq for TaskCommand {
@@ -923,12 +1015,13 @@ impl TaskCommandRunnable {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
-  _id: String,
-  _name: String,
+  pub _id: String,
+  pub _name: String,
   _path: String,
-  _commands: HashMap<String, TaskCommand>,
+  pub _commands: HashMap<String, TaskCommand>,
   _parent_id: Option<String>,
   _children_id: Option<Vec<String>>,
+  pub last_run_time: DateTime<Utc>,
 }
 
 impl Task {
@@ -993,17 +1086,19 @@ impl Task {
       _commands: cmds,
       _parent_id: parent_id,
       _children_id: children_id,
+      last_run_time: Utc::now() - TimeDelta::days(1),
     }
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskStatus {
   Init,
   Starting,
   Running,
   Failed,
   Successed,
+  Stopping,
   Stopped,
 }
 
@@ -1032,6 +1127,10 @@ impl TaskStatus {
     matches!(self, TaskStatus::Successed)
   }
 
+  pub fn is_stopping(&self) -> bool {
+    matches!(self, TaskStatus::Stopping)
+  }
+
   pub fn is_stopped(&self) -> bool {
     matches!(self, TaskStatus::Stopped)
   }
@@ -1045,6 +1144,7 @@ impl Display for TaskStatus {
       TaskStatus::Running => "Running",
       TaskStatus::Failed => "Failed",
       TaskStatus::Successed => "Successed",
+      TaskStatus::Stopping => "Stopping",
       TaskStatus::Stopped => "Stopped",
     };
     write!(f, "TS{}", status_str)

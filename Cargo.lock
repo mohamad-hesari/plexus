@@ -349,7 +349,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
+ "serde",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -1326,7 +1329,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1853,6 +1856,7 @@ version = "0.1.0"
 dependencies = [
  "async-recursion",
  "better_tokio_select",
+ "chrono",
  "clap",
  "color-eyre",
  "command-group",
@@ -1867,6 +1871,7 @@ dependencies = [
  "owo-colors",
  "path-clean",
  "ratatui",
+ "ratatui-interact",
  "regex",
  "schemars",
  "scopeguard",
@@ -2043,6 +2048,19 @@ dependencies = [
  "crossterm",
  "instability",
  "ratatui-core",
+]
+
+[[package]]
+name = "ratatui-interact"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79574553b820a6ebe36e0d09b1e8c470242be09215b95e73618a9b293d135e22"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "regex",
+ "thiserror 2.0.18",
+ "unicode-width",
 ]
 
 [[package]]
