@@ -46,7 +46,15 @@ impl WatchManager {
     let (sx, rx) = tokio::sync::mpsc::unbounded_channel();
     let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
       Ok(event) => match event.kind {
-        notify::EventKind::Create(_) | notify::EventKind::Modify(_) | notify::EventKind::Remove(_) => {
+        notify::EventKind::Modify(modify) => {
+          if matches!(
+            modify,
+            notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Name(_)
+          ) {
+            let _ = sx.send(event);
+          }
+        }
+        notify::EventKind::Create(_) | notify::EventKind::Remove(_) => {
           let _ = sx.send(event);
         }
         _ => {}
@@ -164,7 +172,7 @@ impl WatchManager {
       sleep(Duration::from_millis(1000)).await;
       yield_now().await;
     }
-    info!("Entering watch mode ...");
+    info!(name = "WatchManager", stdout = "Watching for file changes...");
     self.init_watch_state().await;
     let state = self._state.read().await;
     let mut rx = state.rx.write().await;
@@ -202,7 +210,7 @@ impl WatchManager {
                   .await
                   .debounce(Duration::from_millis(500), async move || {
                     info!("File change {:?}", event);
-                    tm.file_changed(&task_id).await;
+                    tm.file_changed(&task_id, event.paths).await;
                   })
                   .await;
               }

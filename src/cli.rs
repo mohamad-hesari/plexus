@@ -208,6 +208,13 @@ pub struct RunArgs {
     help = "Ignore files that match the glob pattern when watching for changes"
   )]
   pub watch_ignore: Vec<String>,
+
+  #[arg(
+    long,
+    default_value = "false",
+    help = "When watching for changes, also watch for changes in which tasks depend on the changed tasks"
+  )]
+  pub build_depends_on: bool,
 }
 
 #[derive(Args, Debug, Clone)]

@@ -1,5 +1,6 @@
 use std::{
   collections::{HashMap, HashSet},
+  path::PathBuf,
   sync::Arc,
 };
 
@@ -69,10 +70,11 @@ pub struct TaskManager {
   _rx: Arc<RwLock<UnboundedReceiver<TaskManagerEvent>>>,
   _sx: Arc<RwLock<UnboundedSender<TaskManagerEvent>>>,
   _counter: Arc<AtomicI8>,
+  _build_depends_on: bool,
 }
 
 impl TaskManager {
-  pub fn new(is_running: Arc<AtomicBool>, show_colors: bool) -> Self {
+  pub fn new(is_running: Arc<AtomicBool>, show_colors: bool, build_depends_on: bool) -> Self {
     let (sx, rx) = unbounded_channel();
     Self {
       _store: Arc::new(TaskStore::new(show_colors)),
@@ -82,6 +84,7 @@ impl TaskManager {
       _rx: Arc::new(RwLock::new(rx)),
       _sx: Arc::new(RwLock::new(sx)),
       _counter: Arc::new(AtomicI8::new(0)),
+      _build_depends_on: build_depends_on,
     }
   }
 
@@ -99,7 +102,7 @@ impl TaskManager {
     Arc::new(sx.clone())
   }
 
-  pub async fn file_changed(&self, _task_id: &str) {
+  pub async fn file_changed(&self, _task_id: &str, paths: Vec<PathBuf>) {
     trace!(
       "File changed for task with id: {}, resetting its status and the status of its commands",
       _task_id
@@ -107,22 +110,34 @@ impl TaskManager {
     let mut tasks = vec![];
     tasks.push(_task_id.to_string());
     let store_tasks = self._store.get_all_tasks().await;
-    loop {
-      let mut have_added_more = false;
-      for t in &store_tasks {
-        let Some(children_id) = &t._children_id else {
-          continue;
-        };
-        if tasks.contains(&t._id) {
-          continue;
+    let current_changed_task = store_tasks
+      .iter()
+      .find(|t| t._id == _task_id)
+      .unwrap_or_else(|| panic!("Trying to get non-existing task with id: {}", _task_id));
+    for path in paths {
+      info!(
+        name = current_changed_task._name,
+        stdout = format!("File {} changed, resetting status of related tasks", path.display())
+      );
+    }
+    if self._build_depends_on {
+      loop {
+        let mut have_added_more = false;
+        for t in &store_tasks {
+          let Some(children_id) = &t._children_id else {
+            continue;
+          };
+          if tasks.contains(&t._id) {
+            continue;
+          }
+          if children_id.iter().any(|id| tasks.iter().any(|t| t == id)) {
+            tasks.push(t._id.clone());
+            have_added_more = true;
+          }
         }
-        if children_id.iter().any(|id| tasks.iter().any(|t| t == id)) {
-          tasks.push(t._id.clone());
-          have_added_more = true;
+        if !have_added_more {
+          break;
         }
-      }
-      if !have_added_more {
-        break;
       }
     }
     for task in store_tasks
@@ -331,34 +346,46 @@ impl TaskManager {
         if !is_watch_mode && self._store.is_all_running_or_finished().await {
           self._is_watch_mode.store(true, Ordering::Relaxed);
         }
-        if start_time.elapsed() > Duration::from_secs(5) && !is_watch_mode {
+        if start_time.elapsed() > Duration::from_secs(10) && !is_watch_mode {
           if self._store.is_all_not_init().await {
+            self._is_watch_mode.store(true, Ordering::Relaxed);
+          } else if self._store.is_any_failed().await {
             self._is_watch_mode.store(true, Ordering::Relaxed);
           }
         }
       }
 
       if last_log_time.elapsed() >= log_interval {
-        trace!("Current task statuses: \n{}", {
-          let tasks = self._store.get_all_tasks().await;
-          let mut status_report = String::new();
-          for task in tasks {
-            for cmd in task._commands.values() {
-              status_report.push_str(&format!(
-                "Task: {}, Command: {}, Status: {}\n",
-                task._name, cmd._command, cmd._status
-              ));
+        trace!(
+          name = "TaskManager",
+          stdout = format!("Current task statuses: \n{}", {
+            let tasks = self._store.get_all_tasks().await;
+            let mut status_report = String::new();
+            for task in tasks {
+              for cmd in task._commands.values() {
+                status_report.push_str(&format!(
+                  "Task: {}, Command: {}, Status: {}\n",
+                  task._name, cmd._command, cmd._status
+                ));
+              }
             }
-          }
-          status_report.push_str(&format!(
-            "Counter: {}, Watch mode: {}, watch mode env: {}, is all runing or finished: {}",
-            self._counter.load(Ordering::Relaxed),
-            self._is_watch_mode.load(Ordering::Relaxed),
-            _watch_mode,
-            self._store.is_all_running_or_finished().await
-          ));
-          status_report
-        });
+            status_report.push_str(&format!(
+              "Counter: {}, Watch mode: {}, watch mode env: {}, is all runing or finished: {}\n",
+              self._counter.load(Ordering::Relaxed),
+              self._is_watch_mode.load(Ordering::Relaxed),
+              _watch_mode,
+              self._store.is_all_running_or_finished().await
+            ));
+
+            status_report.push_str(&format!(
+              "start time elapsed: {:.2}s, is_watch_mode: {}, is_all_not_init: {}",
+              start_time.elapsed().as_secs_f32(),
+              self._is_watch_mode.load(Ordering::Relaxed),
+              self._store.is_all_not_init().await
+            ));
+            status_report
+          })
+        );
 
         // Reset the timer for the next 5 seconds
         last_log_time = Instant::now();
@@ -374,9 +401,18 @@ impl TaskManager {
         let counter_cloned = Arc::clone(&counter);
         _ = tokio::spawn(async move {
           yield_now().await;
+          let timer = Instant::now();
+          let name = cmd._name.clone();
           let task_runnder = TaskRunner::new(store, is_running);
           task_runnder.run_command(cmd).await;
           counter_cloned.fetch_sub(1, Ordering::Relaxed);
+          info!(
+            name = name,
+            stdout = format!(
+              "Finished running command, elapsed time: {}s",
+              timer.elapsed().as_secs_f32()
+            )
+          );
         });
         yield_now().await;
       }

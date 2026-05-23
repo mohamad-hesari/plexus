@@ -321,6 +321,7 @@ async fn main() {
       let task_manager = Arc::new(task_managerv2::TaskManager::new(
         Arc::clone(&is_running),
         cli.show_colors,
+        cli.build_depends_on,
       ));
       let mut set = tokio::task::JoinSet::new();
       if cli.watch {
