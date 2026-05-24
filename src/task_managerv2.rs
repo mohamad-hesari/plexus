@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::{DateTime, TimeDelta, Utc};
+use futures::{StreamExt, stream};
 use tokio::{
   io::{AsyncBufReadExt, BufReader},
   process::Command,
@@ -632,6 +633,8 @@ impl TaskRunner {
       );
     }
 
+    self._store.set_last_run_time(&cmd._task_id, Utc::now()).await;
+
     let mut finished_status = TaskStatus::Successed;
     ticker.reset();
     tokio_select!(
@@ -700,6 +703,7 @@ pub struct TaskStore {
   _tasks: Arc<RwLock<HashMap<String, Task>>>,
   _statuses: Arc<RwLock<HashMap<String, TaskStatus>>>,
   _logs: Arc<RwLock<HashMap<String, Vec<String>>>>,
+  _last_run_time: Arc<RwLock<HashMap<String, DateTime<Utc>>>>,
   _show_colors: bool,
 }
 
@@ -710,6 +714,7 @@ impl TaskStore {
       _statuses: Arc::new(RwLock::new(HashMap::new())),
       _show_colors: show_colors,
       _logs: Arc::new(RwLock::new(HashMap::new())),
+      _last_run_time: Arc::new(RwLock::new(HashMap::new())),
     }
   }
 
@@ -839,6 +844,58 @@ impl TaskStore {
       .clone()
   }
 
+  fn get_task_status(&self, task: &Task) -> InternalTaskStatus {
+    if task._commands.values().any(|c| {
+      c._status.is_running()
+        || c._status.is_starting()
+        || c._status.is_stopping()
+        || c._status.is_stopped()
+        || c._status.is_failed()
+    }) {
+      InternalTaskStatus::Running
+    } else {
+      InternalTaskStatus::Other
+    }
+  }
+
+  pub async fn get_all_tasks_with_details(&self) -> Vec<TaskWithDetails> {
+    let tasks = self._tasks.read().await;
+    let tasks_values = tasks.values().cloned().collect::<Vec<Task>>();
+    drop(tasks);
+    let mut result = stream::iter(tasks_values)
+      .then(|task| async move {
+        let task_status = self.get_task_status(&task);
+        TaskWithDetails {
+          _id: task._id.clone(),
+          _name: task._name.clone(),
+          _path: task._path.clone(),
+          _commands: task._commands.clone(),
+          _parent_id: task._parent_id.clone(),
+          _children_id: task._children_id.clone(),
+          _status: task_status,
+          last_run_time: self.get_last_run_time(&task._id).await,
+        }
+      })
+      .collect::<Vec<_>>()
+      .await;
+
+    result.sort_by(|a, b| match (a._status, b._status) {
+      (InternalTaskStatus::Running, InternalTaskStatus::Running) => a._name.cmp(&b._name),
+      (InternalTaskStatus::Other, InternalTaskStatus::Other) => self.compare_last_run_time(a, b),
+      (InternalTaskStatus::Running, InternalTaskStatus::Other) => std::cmp::Ordering::Less,
+      (InternalTaskStatus::Other, InternalTaskStatus::Running) => std::cmp::Ordering::Greater,
+    });
+
+    result
+  }
+
+  fn compare_last_run_time(&self, a: &TaskWithDetails, b: &TaskWithDetails) -> std::cmp::Ordering {
+    let default_time = Utc::now() + TimeDelta::days(-1);
+    let a_time = a.last_run_time.unwrap_or(default_time);
+    let b_time = b.last_run_time.unwrap_or(default_time);
+    b_time.cmp(&a_time)
+  }
+
   pub async fn get_all_tasks(&self) -> Vec<Task> {
     let tasks = self._tasks.read().await;
     tasks.values().cloned().collect()
@@ -871,15 +928,22 @@ impl TaskStore {
     statuses.values().any(|status| status.is_failed())
   }
 
+  pub async fn set_last_run_time(&self, id: &str, time: DateTime<Utc>) {
+    let mut last_run_time = self._last_run_time.write().await;
+    last_run_time.insert(id.to_string(), time);
+  }
+
+  pub async fn get_last_run_time(&self, id: &str) -> Option<DateTime<Utc>> {
+    let last_run_time = self._last_run_time.read().await;
+    last_run_time.get(id).cloned()
+  }
+
   pub async fn set_status(&self, id: &str, status: TaskStatus) {
     let mut tasks = self._tasks.write().await;
     let mut found = false;
     for task in tasks.values_mut() {
       if found {
         break;
-      }
-      if status.is_running() {
-        task.last_run_time = Utc::now();
       }
       for cmd in task._commands.values_mut() {
         if cmd._id == id {
@@ -997,6 +1061,7 @@ impl PartialEq<&TaskCommand> for TaskCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCommandRunnable {
   _id: String,
+  _task_id: String,
   _name: String,
   _command: TaskCommandType,
   _path: String,
@@ -1009,6 +1074,7 @@ impl TaskCommandRunnable {
       _name: task._name.clone(),
       _command: cmd._command.clone(),
       _path: task._path.clone(),
+      _task_id: task._id.clone(),
     }
   }
 }
@@ -1021,7 +1087,18 @@ pub struct Task {
   pub _commands: HashMap<String, TaskCommand>,
   _parent_id: Option<String>,
   _children_id: Option<Vec<String>>,
-  pub last_run_time: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskWithDetails {
+  pub _id: String,
+  pub _name: String,
+  _path: String,
+  pub _commands: HashMap<String, TaskCommand>,
+  _parent_id: Option<String>,
+  _children_id: Option<Vec<String>>,
+  pub _status: InternalTaskStatus,
+  last_run_time: Option<DateTime<Utc>>,
 }
 
 impl Task {
@@ -1086,7 +1163,6 @@ impl Task {
       _commands: cmds,
       _parent_id: parent_id,
       _children_id: children_id,
-      last_run_time: Utc::now() - TimeDelta::days(1),
     }
   }
 }
@@ -1149,4 +1225,10 @@ impl Display for TaskStatus {
     };
     write!(f, "TS{}", status_str)
   }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum InternalTaskStatus {
+  Running,
+  Other,
 }

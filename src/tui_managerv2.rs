@@ -3,7 +3,7 @@ use futures::StreamExt;
 use ratatui::{
   Frame,
   layout::{Alignment, Constraint, Direction, Layout, Rect},
-  style::{Color, Modifier, Style},
+  style::{Color, Modifier, Style, Stylize},
   symbols::scrollbar,
   text::{Line, Span, Text},
   widgets::{
@@ -25,16 +25,10 @@ use crossterm::{
   execute,
 };
 
-use crate::task_managerv2::{self, Task};
+use crate::task_managerv2::{self, InternalTaskStatus, TaskWithDetails};
 
-static QUIT_CONFIRM_SECONDS: i64 = 10;
+static QUIT_CONFIRM_SECONDS: i64 = 5;
 static FRAME_RATE: u64 = 1000 / 15; // 15 FPS
-
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-enum InternalTaskStatus {
-  Running,
-  Other,
-}
 
 struct State {
   selected_task_id: Option<String>,
@@ -49,13 +43,13 @@ struct State {
 }
 
 impl State {
-  pub fn clear(&mut self) {
-    self.logs.clear();
-  }
-
-  pub fn scroll(&self) -> usize {
-    self.scroll
-  }
+  // pub fn clear(&mut self) {
+  //   self.logs.clear();
+  // }
+  //
+  // pub fn scroll(&self) -> usize {
+  //   self.scroll
+  // }
 
   pub fn logs(&self) -> Vec<String> {
     self.logs[self.scroll..(self.scroll + self.viewport_height).min(self.logs.len())].to_vec()
@@ -162,10 +156,10 @@ impl State {
     self.update_state();
   }
 
-  pub fn visible_lines(&self) -> &[String] {
-    let end = (self.scroll + self.viewport_height).min(self.logs.len());
-    &self.logs[self.scroll..end]
-  }
+  // pub fn visible_lines(&self) -> &[String] {
+  //   let end = (self.scroll + self.viewport_height).min(self.logs.len());
+  //   &self.logs[self.scroll..end]
+  // }
 
   pub fn scrollbar_state(&mut self) -> &mut ScrollbarState {
     &mut self.state
@@ -210,9 +204,16 @@ impl TuiManager {
     frame.render_widget(paragraph, vertical_chunks[1]);
   }
 
-  fn task_widget(&self, task: &Task, selected_id: &str, frame_count: usize, max_name_length: usize) -> ListItem<'_> {
+  fn task_widget(
+    &self,
+    task: &TaskWithDetails,
+    selected_id: &str,
+    frame_count: usize,
+    max_name_length: usize,
+  ) -> ListItem<'_> {
     let spinner_index = frame_count % SPINERS.len();
     let task_name = task._name.clone();
+    let space = max_name_length + 4;
     let mut spans = vec![
       Span::styled(
         if task._id == selected_id {
@@ -222,7 +223,7 @@ impl TuiManager {
         },
         Style::default().fg(Color::Green),
       ),
-      Span::styled(format!("{task_name:<max_name_length$}"), Style::default()),
+      Span::styled(format!("{task_name:<space$}"), Style::default()),
     ];
     let mut commands = task._commands.values().cloned().collect::<Vec<_>>();
     commands.sort_by(|a, b| a._command.to_string().cmp(&b._command.to_string()));
@@ -245,9 +246,18 @@ impl TuiManager {
         Style::default()
       }
       .add_modifier(Modifier::BOLD);
-      spans.push(Span::styled(format!(" {} {}", symbol, task_cmd._command), style));
+      spans.push(Span::styled(format!("{} {}", symbol, task_cmd._command), style));
+      spans.push(Span::raw(" "));
     });
-    ListItem::new(Line::from(spans)).style(Style::default())
+    // spans.push(Span::styled(
+    //   format!(" ({})", task.last_run_time.format("%Y-%m-%d %H:%M:%S.3f")),
+    //   Style::default().fg(Color::DarkGray),
+    // ));
+    ListItem::new(Line::from(spans)).style(if task._id == selected_id {
+      Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+      Style::default()
+    })
   }
 
   fn apply_dim_overlay(&self, frame: &mut Frame, area: Rect) {
@@ -290,7 +300,7 @@ impl TuiManager {
     horizontal_chunks[1]
   }
 
-  fn draw_logs_dialog(&self, frame: &mut ratatui::Frame, area: Rect, state: &mut State) {
+  fn draw_logs_dialog(&self, frame: &mut Frame, area: Rect, state: &mut State, tasks: &Vec<TaskWithDetails>) {
     let sidebar_area = {
       let vertical_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -303,16 +313,38 @@ impl TuiManager {
       horizontal_chunks
     };
 
+    let task = tasks
+      .iter()
+      .find(|t| Some(&t._id) == state.selected_task_id.as_ref())
+      .unwrap();
+
+    let title = {
+      let mut spans = vec![Span::styled(format!("{} commands: ", task._name), Style::default())];
+      for (idx, cmd) in task._commands.values().clone().into_iter().enumerate() {
+        let style = if idx == state.command_index {
+          Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+            .reversed()
+        } else {
+          Style::default().add_modifier(Modifier::DIM)
+        };
+        spans.push(Span::styled(format!("{}", cmd._command), style));
+        spans.push(Span::raw(" "));
+      }
+      Line::from(spans)
+    };
+
     frame.render_widget(Clear, sidebar_area[1]);
     self.apply_dim_overlay(frame, sidebar_area[0]); // Dim the main area to make the sidebar pop
-    self.draw_scrollable_logs(frame, state, sidebar_area[1], "TITLE", false);
+    self.draw_scrollable_logs(frame, state, sidebar_area[1], title);
   }
 
   fn exact_text_centered_rect(&self, text_len: u16, parent_area: Rect) -> (Rect, Vec<Rect>) {
     // 1. Box width needs to be text length + 2 cells for left/right borders
     let box_width = text_len + 2;
     // 2. Box height (e.g., 3 lines high: 1 line text + top border + bottom border)
-    let box_height = 3;
+    let box_height = 5;
 
     // Center vertically
     let vertical_padding = parent_area.height.saturating_sub(box_height) / 2;
@@ -348,20 +380,49 @@ impl TuiManager {
   }
 
   fn draw_quit_dialog(&self, frame: &mut ratatui::Frame, area: Rect, state: &mut State) {
-    let text = format!(
-      "Press q|ctrl+c -> quit, ESC -> cancel or wait {} seconds to cancel.",
-      QUIT_CONFIRM_SECONDS
-        - state
-          .quit
-          .unwrap()
-          .signed_duration_since(Utc::now())
-          .num_seconds()
-          .abs()
-    );
+    let time_elapsed = state
+      .quit
+      .unwrap()
+      .signed_duration_since(Utc::now())
+      .num_seconds()
+      .abs();
 
+    let seconds_remaining = QUIT_CONFIRM_SECONDS.saturating_sub(time_elapsed);
+    let text = format!(
+      "[q / Ctrl+C] Quit │ [Esc] Cancel (Auto-resume in {}s)",
+      seconds_remaining
+    );
     let text_len = text.chars().count() as u16;
     let (centered_area, others) = self.exact_text_centered_rect(text_len, area);
-    let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL));
+
+    let dialog_lines = vec![
+      // Line 1: Header title indicator line
+      Line::from(vec![
+        Span::raw("  ").yellow(),
+        Span::raw("Quit Application?").white().bold(),
+      ]),
+      // Line 2: Empty spacer block line for breathing room inside the container
+      Line::from(""),
+      // Line 3: High-contrast key combinations mapped to actions
+      Line::from(vec![
+        Span::raw(" Press "),
+        Span::raw("q").red().bold(),
+        Span::raw(" or "),
+        Span::raw("Ctrl+C").red().bold(),
+        Span::raw(" to exit. Press "),
+        Span::raw("Esc").green().bold(),
+        Span::raw(" or wait "),
+        Span::raw(format!("{}s", seconds_remaining)).yellow().bold(),
+        Span::raw(" to resume."),
+      ]),
+    ];
+
+    let paragraph = Paragraph::new(dialog_lines).block(
+      Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .border_type(BorderType::Thick),
+    );
     for other in others {
       self.apply_dim_overlay(frame, other);
     }
@@ -369,7 +430,7 @@ impl TuiManager {
     frame.render_widget(paragraph, centered_area);
   }
 
-  fn draw_scrollable_logs(&self, f: &mut Frame, app: &mut State, area: Rect, title: &str, selected: bool) {
+  fn draw_scrollable_logs(&self, f: &mut Frame, app: &mut State, area: Rect, title: Line) {
     let viewport_height = area.height.saturating_sub(2);
     app.set_viewport_height(viewport_height);
 
@@ -391,23 +452,13 @@ impl TuiManager {
       })
       .collect();
 
-    let final_title = if selected {
-      format!("{} (f: follow, ↑/PgUp, ↓/PgDn, Home, End)", title)
-    } else {
-      title.to_string()
-    };
-
     let paragraph = Paragraph::new(Text::from(lines))
       .block(
         Block::default()
           .borders(Borders::ALL)
-          .border_type(if selected { BorderType::Thick } else { BorderType::Plain })
-          .style(if selected {
-            Style::default().fg(Color::Yellow)
-          } else {
-            Style::default()
-          })
-          .title(final_title),
+          .border_type(BorderType::Plain)
+          .style(Style::default())
+          .title(title),
       )
       // IMPORTANT: use your scroll, not scrollbar state
       .scroll((0, 0));
@@ -420,7 +471,14 @@ impl TuiManager {
     f.render_stateful_widget(scrollbar, area, app.scrollbar_state());
   }
 
-  fn main_widget(&self, tasks: Vec<Task>, state: &State, frame: &mut ratatui::Frame, area: Rect, frame_count: usize) {
+  fn main_widget(
+    &self,
+    tasks: &Vec<TaskWithDetails>,
+    state: &State,
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    frame_count: usize,
+  ) {
     let main_chunks = Layout::default()
       .direction(Direction::Vertical)
       .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -430,7 +488,6 @@ impl TuiManager {
       .direction(Direction::Vertical)
       .constraints([Constraint::Percentage(20), Constraint::Min(0)])
       .split(main_chunks[0]);
-    let tasks = tasks.iter().map(|t| (t, self.get_task_status(t))).collect::<Vec<_>>();
     let selected_task_id = if let Some(ref id) = state.selected_task_id {
       id.clone()
     } else {
@@ -438,15 +495,15 @@ impl TuiManager {
     };
     let running_task_items: Vec<_> = tasks
       .iter()
-      .filter(|(_, status)| *status == InternalTaskStatus::Running)
-      .map(|(t, _)| self.task_widget(&t, &selected_task_id, frame_count, max_name_length))
+      .filter(|t| t._status == InternalTaskStatus::Running)
+      .map(|t| self.task_widget(&t, &selected_task_id, frame_count, max_name_length))
       .collect::<Vec<_>>();
     let list = List::new(running_task_items).block(Block::default());
     frame.render_widget(list, vertical_chunks[0]);
     let finished_task_items: Vec<_> = tasks
       .iter()
-      .filter(|(_, status)| *status == InternalTaskStatus::Other)
-      .map(|(t, _)| self.task_widget(&t, &selected_task_id, frame_count, max_name_length))
+      .filter(|t| t._status == InternalTaskStatus::Other)
+      .map(|t| self.task_widget(&t, &selected_task_id, frame_count, max_name_length))
       .collect();
     let list = List::new(finished_task_items).block(Block::default());
     frame.render_widget(list, vertical_chunks[1]);
@@ -477,19 +534,7 @@ impl TuiManager {
     ));
     frame.render_widget(status_bar, main_chunks[1]);
   }
-  fn get_task_status(&self, task: &Task) -> InternalTaskStatus {
-    if task._commands.values().any(|c| {
-      c._status.is_running()
-        || c._status.is_starting()
-        || c._status.is_stopping()
-        || c._status.is_stopped()
-        || c._status.is_failed()
-    }) {
-      InternalTaskStatus::Running
-    } else {
-      InternalTaskStatus::Other
-    }
-  }
+
   pub async fn main_loop(&self) {
     let mut stdout = io::stdout();
     execute!(stdout, EnableMouseCapture).unwrap();
@@ -518,47 +563,7 @@ impl TuiManager {
         loading = false;
       }
 
-      let tasks = self._task_manager.get_store().get_all_tasks().await;
-      let mut tasks = tasks.clone();
-      tasks.sort_by(|a, b| match (self.get_task_status(&a), self.get_task_status(&b)) {
-        (InternalTaskStatus::Running, InternalTaskStatus::Running) => a._name.cmp(&b._name),
-        (InternalTaskStatus::Other, InternalTaskStatus::Other) => b.last_run_time.cmp(&a.last_run_time),
-        (InternalTaskStatus::Running, InternalTaskStatus::Other) => std::cmp::Ordering::Less,
-        (InternalTaskStatus::Other, InternalTaskStatus::Running) => std::cmp::Ordering::Greater,
-      });
-      // let running_tasks = Arc::new(
-      //   tasks
-      //     .clone()
-      //     .into_iter()
-      //     .filter(|t| {
-      //       t._commands.values().any(|c| {
-      //         c._status.is_running()
-      //           || c._status.is_starting()
-      //           || c._status.is_stopping()
-      //           || c._status.is_stopped()
-      //           || c._status.is_failed()
-      //       })
-      //     })
-      //     .collect::<Vec<_>>(),
-      // );
-      //
-      // let running_tasks_clone = Arc::clone(&running_tasks);
-      //
-      // let mut tasks = tasks.clone();
-      // tasks.sort_by(|a, b| b.last_run_time.cmp(&a.last_run_time));
-      // let done_tasks = Arc::new(
-      //   tasks
-      //     .into_iter()
-      //     .filter(|t| {
-      //       t._commands
-      //         .values()
-      //         .all(|c| c._status.is_finished() && !c._status.is_failed())
-      //     })
-      //     .take(10)
-      //     .collect::<Vec<_>>(),
-      // );
-      // let done_tasks_clone = Arc::clone(&done_tasks);
-
+      let tasks = self._task_manager.get_store().get_all_tasks_with_details().await;
       let fr = frame_count.load(std::sync::atomic::Ordering::Relaxed);
       let clone_tasks = tasks.clone();
       if self._show_logs.load(Ordering::Relaxed) {
@@ -584,10 +589,10 @@ impl TuiManager {
       let show_logs = self._show_logs.load(Ordering::Relaxed);
       let draw_result = terminal.try_draw(move |frame| {
         let area = self.apply_terminal_padding(frame.area(), 1, 1);
-        self.main_widget(tasks, &state, frame, area, fr);
+        self.main_widget(&tasks, &state, frame, area, fr);
         if show_logs {
           debug!("Showing logs for task: {}", show_logs);
-          self.draw_logs_dialog(frame, area, &mut state);
+          self.draw_logs_dialog(frame, area, &mut state, &tasks);
         }
         if let Some(ref quit_time) = state.quit {
           if Utc::now().signed_duration_since(*quit_time).num_seconds() >= QUIT_CONFIRM_SECONDS {
@@ -678,7 +683,7 @@ impl TuiManager {
     execute!(stdout, DisableMouseCapture).unwrap();
   }
 
-  async fn handle_logs_key(&self, key_event: event::KeyEvent, tasks: Vec<Task>) {
+  async fn handle_logs_key(&self, key_event: event::KeyEvent, tasks: Vec<TaskWithDetails>) {
     debug!("Key event in logs view: {:?}", key_event);
     match key_event.code {
       KeyCode::Char('f') => {
@@ -754,7 +759,7 @@ impl TuiManager {
         self._show_logs.store(false, Ordering::Relaxed);
         let mut state = self._state.write().await;
         state.last_key_log = Some(format!("Pressed ESC to exit logs view"));
-        state.selected_task_id = None;
+        // state.selected_task_id = None;
         drop(state);
       }
       _ => {
@@ -763,9 +768,9 @@ impl TuiManager {
     }
   }
 
-  async fn handle_main_key(&self, key_event: event::KeyEvent, tasks: Vec<Task>) {
+  async fn handle_main_key(&self, key_event: event::KeyEvent, tasks: Vec<TaskWithDetails>) {
     debug!("Key event: {:?}", key_event);
-    async fn restart_all(tasks: Vec<Task>, task_manager: Arc<task_managerv2::TaskManager>) {
+    async fn restart_all(tasks: Vec<TaskWithDetails>, task_manager: Arc<task_managerv2::TaskManager>) {
       let mut sets = JoinSet::new();
       for task in tasks.iter() {
         debug!("Restarting task ID: {} with name: {}", task._id, task._name);
@@ -810,6 +815,12 @@ impl TuiManager {
         } else {
           state.selected_task_id = Some(tasks[0]._id.clone());
         }
+        drop(state);
+      }
+      KeyCode::Esc => {
+        let mut state = self._state.write().await;
+        state.last_key_log = Some(format!("Pressed ESC to deselect task"));
+        state.selected_task_id = None;
         drop(state);
       }
       KeyCode::Enter => {
