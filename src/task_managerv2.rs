@@ -34,6 +34,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
   config::{Config, ConfigCommand, OptionConfig},
   env::Env,
+  hmr_websocket::HmrWebSocket,
 };
 
 fn uuid() -> String {
@@ -73,11 +74,19 @@ pub struct TaskManager {
   _rx: Arc<RwLock<UnboundedReceiver<TaskManagerEvent>>>,
   _sx: Arc<RwLock<UnboundedSender<TaskManagerEvent>>>,
   _build_depends_on: bool,
+  _depends_on: Option<Vec<String>>,
   _is_loading: Arc<AtomicBool>,
+  _hmr_manager: Arc<HmrWebSocket>,
 }
 
 impl TaskManager {
-  pub fn new(is_running: Arc<AtomicBool>, show_colors: bool, build_depends_on: bool) -> Self {
+  pub fn new(
+    hmr_manager: Arc<HmrWebSocket>,
+    is_running: Arc<AtomicBool>,
+    show_colors: bool,
+    build_depends_on: bool,
+    depends_on: Option<Vec<String>>,
+  ) -> Self {
     let (sx, rx) = unbounded_channel();
     Self {
       _store: Arc::new(TaskStore::new(show_colors)),
@@ -87,7 +96,9 @@ impl TaskManager {
       _rx: Arc::new(RwLock::new(rx)),
       _sx: Arc::new(RwLock::new(sx)),
       _build_depends_on: build_depends_on,
+      _depends_on: depends_on,
       _is_loading: Arc::new(AtomicBool::new(true)),
+      _hmr_manager: hmr_manager,
     }
   }
 
@@ -179,12 +190,13 @@ impl TaskManager {
       .iter()
       .find(|t| t._id == _task_id)
       .unwrap_or_else(|| panic!("Trying to get non-existing task with id: {}", _task_id));
-    for path in paths {
+    for path in paths.clone() {
       info!(
         name = current_changed_task._name,
         stdout = format!("File {} changed, resetting status of related tasks", path.display())
       );
     }
+    let mut hmr_tasks = HashMap::new();
     if self._build_depends_on {
       loop {
         let mut have_added_more = false;
@@ -195,6 +207,10 @@ impl TaskManager {
           if tasks.contains(&t._id) {
             continue;
           }
+          if t._commands.values().any(|cmd| cmd._status.is_running()) {
+            hmr_tasks.insert(t._name.clone(), paths.clone());
+          }
+
           if children_id.iter().any(|id| tasks.iter().any(|t| t == id)) {
             tasks.push(t._id.clone());
             have_added_more = true;
@@ -210,6 +226,14 @@ impl TaskManager {
       .filter(|t| tasks.iter().any(|task_id| task_id == &t._id))
     {
       for cmd in task._commands.values() {
+        if self._build_depends_on
+          && !self
+            ._depends_on
+            .as_ref()
+            .map_or(true, |depends_on| depends_on.iter().any(|d| cmd._command == d.as_str()))
+        {
+          continue;
+        }
         if cmd._status.is_init() || cmd._status.is_finished() {
           self._store.set_status(&cmd._id, TaskStatus::Init).await;
         }
@@ -422,7 +446,7 @@ impl TaskManager {
       }
 
       if last_log_time.elapsed() >= log_interval {
-        info!(
+        trace!(
           name = "TaskManager",
           stdout = format!("Current task statuses: \n{}", {
             let tasks = self._store.get_all_tasks().await;
@@ -462,11 +486,12 @@ impl TaskManager {
         let is_running = Arc::clone(&self._is_running);
         let cmd_id = cmd._id.clone();
         self._store.set_status(&cmd_id, TaskStatus::Starting).await;
+        let hmr_socket = Arc::clone(&self._hmr_manager);
         tasks_set.spawn(async move {
           yield_now().await;
           let timer = Instant::now();
           let name = cmd._name.clone();
-          let task_runnder = TaskRunner::new(store, is_running);
+          let task_runnder = TaskRunner::new(store, hmr_socket, is_running);
           task_runnder.run_command(cmd).await;
           info!(
             name = name,
@@ -504,13 +529,15 @@ impl TaskManager {
 pub struct TaskRunner {
   _store: Arc<TaskStore>,
   _is_running: Arc<AtomicBool>,
+  _hmr_socket: Arc<HmrWebSocket>,
 }
 
 impl TaskRunner {
-  pub fn new(store: Arc<TaskStore>, is_running: Arc<AtomicBool>) -> Self {
+  pub fn new(store: Arc<TaskStore>, hmr_socket: Arc<HmrWebSocket>, is_running: Arc<AtomicBool>) -> Self {
     Self {
       _store: store,
       _is_running: is_running,
+      _hmr_socket: hmr_socket,
     }
   }
 
@@ -551,8 +578,25 @@ impl TaskRunner {
     } else {
       envs.get_envs(&cmd_path).await
     };
+    let mut custom_envs = vec![
+      ("PLEXUS_TASK_PATH", cmd_path.to_string()),
+      ("PLEXUS_TASK_NAME", task_name.to_string()),
+      ("PLEXUS_TASK_COMMAND", command.to_string()),
+      ("PLEXUS_PKG_NAME", cmd_name.to_string()),
+      (
+        "PLEXUS_WS_URL",
+        format!("ws://localhost:{}", self._hmr_socket.port.load(Ordering::Relaxed)),
+      ),
+    ];
     if self._store._show_colors {
-      envs.insert("FORCE_COLOR".to_string(), "1".to_string());
+      custom_envs.push(("PLEXUS_SHOW_COLORS", "1".to_string()));
+    }
+    for (ck, cv) in custom_envs {
+      envs.insert(ck.to_string(), cv);
+    }
+    for (k, v) in envs.iter() {
+      debug!(%task_name, "ENV: {}={}", k, v);
+      // self._store.add_log(&cmd_id, format!("[ENV]: {}={}", k, v)).await;
     }
     let mut child = tokio::process::Command::new("pnpm")
       .arg("--filter")
@@ -1017,6 +1061,15 @@ impl PartialEq<str> for TaskCommandType {
   }
 }
 
+impl PartialEq<&str> for TaskCommandType {
+  fn eq(&self, other: &&str) -> bool {
+    match self {
+      TaskCommandType::Simple(cmd) => cmd == *other,
+      TaskCommandType::Plexus(plexus_cmd) => plexus_cmd.name == *other,
+    }
+  }
+}
+
 impl PartialEq<String> for TaskCommandType {
   fn eq(&self, other: &String) -> bool {
     match self {
@@ -1049,6 +1102,24 @@ impl PartialEq for TaskCommand {
       }
     }
     false
+  }
+}
+
+impl PartialEq<str> for TaskCommand {
+  fn eq(&self, other: &str) -> bool {
+    match &self._command {
+      TaskCommandType::Simple(cmd) => cmd == other,
+      TaskCommandType::Plexus(plexus_cmd) => plexus_cmd.name == other,
+    }
+  }
+}
+
+impl PartialEq<String> for TaskCommand {
+  fn eq(&self, other: &String) -> bool {
+    match &self._command {
+      TaskCommandType::Simple(cmd) => cmd == other,
+      TaskCommandType::Plexus(plexus_cmd) => plexus_cmd.name == *other,
+    }
   }
 }
 

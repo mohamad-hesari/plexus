@@ -3,6 +3,7 @@ pub mod app_state;
 pub mod cli;
 pub mod config;
 pub mod env;
+pub mod hmr_websocket;
 pub mod log_view;
 pub mod pnpm;
 pub mod task_manager;

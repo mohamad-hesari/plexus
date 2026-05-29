@@ -18,7 +18,7 @@ use std::{
   },
 };
 use tokio::{sync::RwLock, task::JoinSet};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crossterm::{
   event::{self, DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode},
@@ -543,8 +543,11 @@ impl TuiManager {
     let mut loading = true;
     let frame_count = Arc::new(AtomicUsize::new(0));
 
+    info!("Starting TUI main loop");
+
     loop {
       if !self._is_running.load(std::sync::atomic::Ordering::Relaxed) {
+        info!("Exit signal received, breaking TUI main loop");
         break;
       }
 
@@ -679,6 +682,7 @@ impl TuiManager {
       );
     }
 
+    debug!("Exiting TUI main loop, performing cleanup");
     ratatui::restore();
     execute!(stdout, DisableMouseCapture).unwrap();
   }

@@ -215,6 +215,13 @@ pub struct RunArgs {
     help = "When watching for changes, also watch for changes in which tasks depend on the changed tasks"
   )]
   pub build_depends_on: bool,
+
+  #[arg(
+    short = 'D',
+    long,
+    help = "This is only effective when the build-depends-on flag is set to true, and filters commands that depend on the changed tasks"
+  )]
+  pub depends_on: Option<Vec<String>>,
 }
 
 #[derive(Args, Debug, Clone)]

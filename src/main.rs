@@ -8,7 +8,7 @@ use std::{
   sync::{Arc, atomic::AtomicBool},
 };
 use time::macros::format_description;
-use tracing::{Event, Level, Metadata, debug, info};
+use tracing::{Event, Level, Metadata, debug, error, info};
 use tracing_core::field::Visit;
 use tracing_subscriber::{
   fmt::{FmtContext, FormatEvent, FormatFields, time::UtcTime},
@@ -308,6 +308,7 @@ async fn main() {
       let config_path = cli.config_path.clone();
       let use_file_config = config_path.is_some_and(|f| Path::new(&f).exists());
       let is_running = Arc::new(AtomicBool::new(true));
+      let main_is_running = Arc::clone(&is_running);
       let config = Arc::new(if use_file_config {
         if let Some(f) = &cli.config_path {
           let reader = std::fs::File::open(&f).expect("Failed to open config file");
@@ -318,12 +319,18 @@ async fn main() {
       } else {
         init_default_config().await
       });
+      let hmr_manager = Arc::new(plexus::hmr_websocket::HmrWebSocket::new(0, Arc::clone(&is_running)));
       let task_manager = Arc::new(task_managerv2::TaskManager::new(
+        Arc::clone(&hmr_manager),
         Arc::clone(&is_running),
         cli.show_colors,
         cli.build_depends_on,
+        cli.depends_on,
       ));
       let mut set = tokio::task::JoinSet::new();
+      set.spawn(async move {
+        hmr_manager.main_loop().await;
+      });
       if cli.watch {
         let watch_manager = Arc::new(watch_managerv2::WatchManager::new(
           Arc::clone(&task_manager),
@@ -360,8 +367,7 @@ async fn main() {
                   info!("Shutting down Plexus...");
                   is_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
-                _ => {
-                  tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                .. if let _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
                   tokio::task::yield_now().await;
                 }
               }
@@ -382,6 +388,36 @@ async fn main() {
       let result = task_manager
         .main_loop(cli.watch, if cli.sequential { commands_len } else { -1 })
         .await;
+      if main_is_running.load(std::sync::atomic::Ordering::Relaxed) {
+        main_is_running.store(false, std::sync::atomic::Ordering::Relaxed);
+      }
+      loop {
+        tokio_select!(
+          biased,
+          match .. {
+            .. if let event = set.join_next() => {
+              if let Some(_) = event {
+                debug!("A background task completed successfully");
+              } else {
+                debug!("A background task failed or was cancelled");
+              }
+              if set.is_empty() {
+                debug!("All background tasks have completed");
+                break;
+              }
+            }
+            .. if let _ = tokio::signal::ctrl_c() => {
+              debug!("Received Ctrl+C while waiting for background tasks to complete");
+              break;
+            }
+            .. if let _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+              error!("Still waiting for background tasks to complete...");
+              break;
+            }
+          }
+        );
+      }
+
       if !result {
         std::process::exit(1);
       }
