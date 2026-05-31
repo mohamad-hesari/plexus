@@ -2,6 +2,7 @@
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { findBinary, githubName, normalName } = require("./find_binary");
 
 const binaryPath = findBinary();
 
@@ -37,5 +38,4 @@ try {
     "⚠️ Failed to generate config schema during postinstall:",
     error.message,
   );
-  process.exit(1);
 }
