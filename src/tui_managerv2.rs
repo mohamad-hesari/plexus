@@ -460,6 +460,7 @@ impl TuiManager {
           .style(Style::default())
           .title(title),
       )
+      .wrap(ratatui::widgets::Wrap { trim: false })
       // IMPORTANT: use your scroll, not scrollbar state
       .scroll((0, 0));
     // NO wrap!

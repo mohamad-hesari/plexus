@@ -13,12 +13,14 @@ const baseName = `plexus-${pkgPlatform}-${arch}`;
 const githubName = `@mohamad-hesari/${baseName}`;
 const normalName = `@m.hesari/${baseName}`;
 
+const exe = process.platform === "win32" ? "plexus.exe" : "plexus";
+
 function findBinary() {
   try {
-    return require.resolve(`${githubName}/bin/plexus`);
+    return require.resolve(`${githubName}/bin/${exe}`);
   } catch (e) {
     try {
-      return require.resolve(`${normalName}/bin/plexus`);
+      return require.resolve(`${normalName}/bin/${exe}`);
     } catch (e2) {
       return null;
     }
