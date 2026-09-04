@@ -53,6 +53,24 @@ Plexus looks for a configuration file in your project root (e.g., `plexus.json`)
 
 ---
 
+## 🖱 Mouse scrolling in the TUI
+
+Mouse capture is off by default, so your terminal keeps its own click-drag text selection.
+Start with `--mouse`, or press `m` while the TUI is running, to let the wheel scroll the log.
+The status bar shows `Wheel on` or `Wheel off` so you can tell which mode you are in.
+
+Inside tmux you need both halves, because tmux does not forward mouse events to a pane
+unless you have asked it to:
+
+```tmux
+set -g mouse on
+```
+
+Without that, tmux never asks the terminal for mouse events and nothing reaches Plexus, no
+matter which flags you pass. `j`/`k`, `PgUp`/`PgDn` and `Home`/`End` always work regardless.
+
+---
+
 ## 📦 Architecture
 
 Plexus uses a **hybrid distribution model**:

@@ -212,9 +212,18 @@ impl LogPane {
   }
 
   fn update_scrollbar(&mut self) {
+    // ratatui's Scrollbar models `position` as running to `content_length - 1`, where the
+    // *last row* sits at the *top* of the viewport. This pane stops when the last row
+    // reaches the *bottom*, which is what a log viewer should do. Feeding it the row count
+    // therefore leaves the thumb short of the end: with twice as many rows as the viewport
+    // it parks the thumb halfway down while the newest line is already on screen.
+    //
+    // So hand it the number of distinct scroll positions instead of the number of rows.
+    // Then position == max_scroll lands on content_length - 1, the thumb bottoms out
+    // exactly when we do, and the thumb still covers viewport/rows of the track.
     self.sb = self
       .sb
-      .content_length(self.rows.len())
+      .content_length(self.max_scroll() + 1)
       .viewport_content_length(self.viewport_height)
       .position(self.scroll);
   }
@@ -729,9 +738,9 @@ impl TuiManager {
   /// wraps rather than truncating: ten shortcuts do not fit on one 100-column row.
   fn status_rows(&self, state: &State, width: u16) -> Vec<Line<'static>> {
     let mouse_label = if self._mouse_wanted.load(Ordering::Relaxed) {
-      "Mouse: capture"
+      "Wheel on"
     } else {
-      "Mouse: select"
+      "Wheel off"
     };
 
     let mut entries: Vec<(String, String)> = state
@@ -1011,14 +1020,17 @@ impl TuiManager {
       let now = !self._mouse_wanted.load(Ordering::Relaxed);
       self._mouse_wanted.store(now, Ordering::Relaxed);
       let mut state = self._state.write().await;
-      state.last_key_log = Some(format!(
-        "Mouse {}",
-        if now {
-          "capture on (terminal selection off)"
+      state.last_key_log = Some(if now {
+        // Inside tmux the wheel still goes nowhere unless tmux itself is asking the outer
+        // terminal for mouse events, and that is off in a default tmux config.
+        if std::env::var_os("TMUX").is_some() {
+          "Wheel on, text selection off (tmux also needs: set -g mouse on)".to_string()
         } else {
-          "capture off (terminal selection on)"
+          "Wheel on, text selection off".to_string()
         }
-      ));
+      } else {
+        "Wheel off, text selection on".to_string()
+      });
       return;
     }
 
@@ -1425,6 +1437,93 @@ mod tests {
     pane.sync(&logs[..1], 10, 2);
     assert_eq!(pane.rows.len(), 1);
     assert_eq!(pane.scroll, 0);
+  }
+
+  /// Render the pane's scrollbar for real and report which track rows the thumb covers.
+  fn thumb_rows(pane: &mut LogPane, track: u16) -> (usize, usize) {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::StatefulWidget;
+
+    let area = Rect::new(0, 0, 1, track);
+    let mut buf = Buffer::empty(area);
+    let bar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+      .symbols(scrollbar::VERTICAL)
+      .begin_symbol(None)
+      .end_symbol(None);
+    StatefulWidget::render(bar, area, &mut buf, &mut pane.sb);
+
+    let thumb = scrollbar::VERTICAL.thumb;
+    let rows: Vec<usize> = (0..track as usize)
+      .filter(|y| buf[(0, *y as u16)].symbol() == thumb)
+      .collect();
+    (*rows.first().expect("thumb is drawn"), *rows.last().unwrap())
+  }
+
+  #[test]
+  fn thumb_bottoms_out_when_the_last_row_is_visible() {
+    // Twice as many rows as the viewport: the case where the old maths parked the thumb
+    // halfway down the track while the newest log line was already on screen.
+    let logs: Vec<String> = (0..40).map(|i| format!("line {i}")).collect();
+    let mut pane = LogPane::new();
+    pane.sync(&logs, 20, 20);
+    assert_eq!(pane.scroll, pane.max_scroll());
+
+    let track = 20u16;
+    let (start, end) = thumb_rows(&mut pane, track);
+    assert_eq!(
+      end,
+      track as usize - 1,
+      "at the bottom of the log the thumb must reach the bottom of the track, got rows {start}..={end}"
+    );
+  }
+
+  #[test]
+  fn thumb_tops_out_at_the_start_of_the_log() {
+    let logs: Vec<String> = (0..40).map(|i| format!("line {i}")).collect();
+    let mut pane = LogPane::new();
+    pane.sync(&logs, 20, 20);
+    pane.home();
+    let (start, _) = thumb_rows(&mut pane, 20);
+    assert_eq!(start, 0, "at the top of the log the thumb must start at row 0");
+  }
+
+  #[test]
+  fn thumb_size_tracks_how_much_of_the_log_is_visible() {
+    // A viewport showing a quarter of the log gets roughly a quarter of the track.
+    let logs: Vec<String> = (0..80).map(|i| format!("line {i}")).collect();
+    let mut pane = LogPane::new();
+    pane.sync(&logs, 20, 20);
+    let (start, end) = thumb_rows(&mut pane, 20);
+    let len = end - start + 1;
+    assert!((4..=6).contains(&len), "expected about 5 of 20 track rows, got {len}");
+  }
+
+  #[test]
+  fn thumb_fills_the_track_when_nothing_scrolls() {
+    let logs: Vec<String> = (0..3).map(|i| format!("line {i}")).collect();
+    let mut pane = LogPane::new();
+    pane.sync(&logs, 20, 20);
+    assert_eq!(pane.max_scroll(), 0);
+    let (start, end) = thumb_rows(&mut pane, 20);
+    assert_eq!((start, end), (0, 19), "an unscrollable log gets a full-height thumb");
+  }
+
+  #[test]
+  fn thumb_moves_monotonically_from_top_to_bottom() {
+    let logs: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+    let mut pane = LogPane::new();
+    pane.sync(&logs, 20, 20);
+    pane.home();
+    let mut last = 0usize;
+    for step in 0..pane.max_scroll() {
+      pane.down(1);
+      let (start, _) = thumb_rows(&mut pane, 20);
+      assert!(start >= last, "thumb went backwards at step {step}: {start} < {last}");
+      last = start;
+    }
+    let (_, end) = thumb_rows(&mut pane, 20);
+    assert_eq!(end, 19, "scrolling all the way down must bottom the thumb out");
   }
 
   #[test]

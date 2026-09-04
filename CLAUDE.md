@@ -108,16 +108,38 @@ used to hide the tail of the log below the bottom border. `LogPane::sync` wraps 
 arrived lines, rewraps everything on a width change, and is the only place that touches
 `scroll`. Render the resulting slice with wrapping switched off, never `Paragraph::wrap`.
 
+The scrollbar needs a second translation on top of that. ratatui's `ScrollbarState` runs
+`position` up to `content_length - 1`, meaning the last row ends up at the *top* of the
+viewport; this pane stops when the last row reaches the *bottom*. Passing the row count as
+`content_length` therefore leaves the thumb short of the end, half way down the track when
+the log is twice the viewport height. Pass the number of scroll positions instead,
+`max_scroll() + 1`. `thumb_bottoms_out_when_the_last_row_is_visible` renders a real
+`Scrollbar` into a `Buffer` and asserts on where the thumb lands, so a regression here fails
+a test rather than needing an eyeball.
+
 **One pane per tab.** `LogsWindow.panes` is keyed by command id, so each tab keeps its own
 scroll position and follow flag, and `s` / `r` / `S` act on the visible tab's command only.
 Every one of those actions goes through `spawn_action`, because `TaskManager::stop_command`
 polls for up to five seconds and would otherwise freeze the render loop for that whole time.
 
-Mouse handling is deliberately off by default. Capturing the mouse takes click-drag text
-selection away from the terminal, so the TUI enables alternate scroll (`ESC[?1007h`) inside
-the alternate screen instead, which makes the wheel emit cursor keys the log view already
-handles. `--mouse` or the `m` key turns real capture on for terminals that lack it. On exit,
-disable alternate scroll *before* leaving the alternate screen.
+Mouse capture is off by default, because capturing the mouse takes click-drag text selection
+away from the terminal. `--mouse` or the `m` key turns it on, and the status bar says which
+you are in (`Wheel on` / `Wheel off`). On exit, disable alternate scroll *before* leaving the
+alternate screen.
+
+The TUI also sets alternate scroll (`ESC[?1007h`), which makes some terminals translate the
+wheel into cursor keys the log view already handles. Do not rely on it. Measured behaviour
+under tmux 3.7:
+
+| tmux `mouse` | plexus capture | wheel reaches plexus |
+| --- | --- | --- |
+| `off` (the tmux default) | either | no, tmux never asks the outer terminal for mouse events |
+| `on` | off | no, tmux keeps the wheel for its own copy-mode |
+| `on` | on | yes |
+
+So under tmux the wheel needs both `set -g mouse on` in tmux and capture on in plexus. The
+`m` handler mentions the tmux half when `$TMUX` is set, since that is the part nothing in
+plexus can fix.
 
 ## Cross-platform notes
 

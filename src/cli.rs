@@ -146,7 +146,7 @@ pub struct RunArgs {
   #[arg(
     long,
     default_value = "false",
-    help = "Capture the mouse in the TUI. Wheel scrolling works without this in most terminals via alternate scroll; turning capture on gives click-to-select tabs but disables your terminal's own text selection. Toggle it at runtime with 'm'."
+    help = "Capture the mouse so the wheel scrolls the log. Off by default because capturing the mouse takes click-drag text selection away from your terminal; press 'm' to toggle it at runtime. Inside tmux this also needs `set -g mouse on`, otherwise tmux never asks the terminal for mouse events and nothing reaches plexus."
   )]
   pub mouse: bool,
 
