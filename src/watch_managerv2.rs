@@ -24,14 +24,43 @@ pub struct WatchManager {
   _ignores: Vec<String>,
 }
 
+/// Turn a filesystem path into the string form the glob sets are built against.
+///
+/// On Windows `Path::canonicalize` hands back a `\\?\C:\...` verbatim path while the
+/// paths in a notify event usually are not verbatim, so a pattern built from one would
+/// never match a candidate built from the other. Stripping the prefix and settling on `/`
+/// as the separator makes both sides comparable, and matches the forward-slash paths the
+/// generated config stores.
+fn normalize_for_glob<P: AsRef<Path>>(path: P) -> String {
+  let s = path.as_ref().to_string_lossy().replace('\\', "/");
+  s.strip_prefix("//?/").map(str::to_string).unwrap_or(s)
+}
+
+/// Escape the glob metacharacters in a literal directory name so a project living under a
+/// path such as `packages/[locale]` still compiles into a usable pattern.
+fn escape_glob_literal(s: &str) -> String {
+  let mut out = String::with_capacity(s.len());
+  for c in s.chars() {
+    if matches!(c, '*' | '?' | '[' | ']' | '{' | '}') {
+      out.push('[');
+      out.push(c);
+      out.push(']');
+    } else {
+      out.push(c);
+    }
+  }
+  out
+}
+
 struct FileGlobSet {
   include: GlobSet,
   exclude: GlobSet,
 }
 
 impl FileGlobSet {
-  pub fn is_match<P: AsRef<Path> + Clone>(&self, path: P) -> bool {
-    self.include.is_match(path.clone()) && !self.exclude.is_match(path)
+  pub fn is_match<P: AsRef<Path>>(&self, path: P) -> bool {
+    let candidate = normalize_for_glob(path);
+    self.include.is_match(&candidate) && !self.exclude.is_match(&candidate)
   }
 }
 
@@ -90,10 +119,8 @@ impl WatchManager {
       let mut exclude_set = GlobSetBuilder::new();
 
       // Add global ignore globs from CLI
-      if self._ignores.len() > 0 {
-        for ignore in &self._ignores {
-          exclude_set.add(Glob::new(&format!("{}", ignore)).expect("Invalid global ignore glob pattern"));
-        }
+      for ignore in &self._ignores {
+        exclude_set.add(Glob::new(ignore).expect("Invalid global ignore glob pattern"));
       }
 
       if have_globs {
@@ -105,7 +132,7 @@ impl WatchManager {
           include_set.add(Glob::new(&include).expect("Invalid include glob pattern"));
         }
         for exclude in d.excludes {
-          exclude_set.add(Glob::new(&format!("{}", exclude)).expect("Invalid exclude glob pattern"));
+          exclude_set.add(Glob::new(&exclude).expect("Invalid exclude glob pattern"));
         }
       }
       if !d.use_default_watch_ignore {
@@ -118,7 +145,10 @@ impl WatchManager {
             "Task {} is watching {} without using default watch ignore and without any globs, which may lead to watching more files than intended. Consider adding include/exclude globs or enabling default watch ignore.",
             d.task_id, d.task_path
           );
-          include_set.add(Glob::new(&format!("{}/**/*", d.task_path)).expect("Invalid glob pattern"));
+          include_set.add(
+            Glob::new(&format!("{}/**/*", escape_glob_literal(&normalize_for_glob(&d.task_path))))
+              .expect("Invalid glob pattern"),
+          );
         }
       } else {
         let walk = WalkBuilder::new(&d.task_path)
@@ -126,24 +156,25 @@ impl WatchManager {
           .max_depth(Some(1))
           .min_depth(Some(1))
           .build();
-        for entry in walk {
-          if let Ok(entry) = entry {
-            let final_path = entry.path().canonicalize().unwrap();
-            debug!("Watching path: {:?}", final_path);
-            if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-              state
-                .watcher
-                .watch(&final_path, RecursiveMode::NonRecursive)
-                .expect("Failed to watch file");
-              include_set.add(Glob::new(&final_path.to_string_lossy()).expect("Invalid glob pattern"));
-            } else if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-              state
-                .watcher
-                .watch(&final_path, RecursiveMode::Recursive)
-                .expect("Failed to watch directory");
-              include_set
-                .add(Glob::new(&format!("{}/**/*", final_path.to_string_lossy())).expect("Invalid glob pattern"));
-            }
+        for entry in walk.flatten() {
+          let Ok(final_path) = entry.path().canonicalize() else {
+            warn!("Could not resolve {:?}, not watching it", entry.path());
+            continue;
+          };
+          let pattern_base = escape_glob_literal(&normalize_for_glob(&final_path));
+          debug!("Watching path: {:?} as {}", final_path, pattern_base);
+          if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            state
+              .watcher
+              .watch(&final_path, RecursiveMode::NonRecursive)
+              .expect("Failed to watch file");
+            include_set.add(Glob::new(&pattern_base).expect("Invalid glob pattern"));
+          } else if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            state
+              .watcher
+              .watch(&final_path, RecursiveMode::Recursive)
+              .expect("Failed to watch directory");
+            include_set.add(Glob::new(&format!("{}/**/*", pattern_base)).expect("Invalid glob pattern"));
           }
         }
       }

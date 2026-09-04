@@ -262,7 +262,7 @@ impl TaskManager {
         pnpm_filters.insert(filter.to_string());
         continue;
       }
-      let cmd = Command::new("pnpm")
+      let cmd = Command::new(crate::pnpm_bin::pnpm_or_exit())
         .arg("list")
         .arg("--filter")
         .arg(filter)
@@ -598,7 +598,16 @@ impl TaskRunner {
       debug!(%task_name, "ENV: {}={}", k, v);
       // self._store.add_log(&cmd_id, format!("[ENV]: {}={}", k, v)).await;
     }
-    let mut child = tokio::process::Command::new("pnpm")
+    let pnpm = match crate::pnpm_bin::pnpm() {
+      Ok(p) => p,
+      Err(e) => {
+        error!(name = task_name, stderr = %e);
+        store.add_log(&cmd_id, format!("[ERR]: {}", e)).await;
+        store.set_status(&cmd_id, TaskStatus::Failed).await;
+        return;
+      }
+    };
+    let spawned = tokio::process::Command::new(pnpm)
       .arg("--filter")
       .arg(&cmd_name)
       .arg(command)
@@ -608,8 +617,18 @@ impl TaskRunner {
       .stderr(std::process::Stdio::piped())
       .kill_on_drop(true)
       .group()
-      .spawn()
-      .unwrap_or_else(|_| panic!("Failed to start task {}", task_name));
+      .spawn();
+    // A command we cannot spawn should fail its own task, not take down the whole run.
+    let mut child = match spawned {
+      Ok(child) => child,
+      Err(e) => {
+        let msg = format!("Failed to start task {} via {}: {}", task_name, pnpm.display(), e);
+        error!(name = task_name, stderr = %msg);
+        store.add_log(&cmd_id, format!("[ERR]: {}", msg)).await;
+        store.set_status(&cmd_id, TaskStatus::Failed).await;
+        return;
+      }
+    };
 
     debug!(%task_name, "Process started for task");
 
@@ -1158,6 +1177,20 @@ pub struct Task {
   pub _commands: HashMap<String, TaskCommand>,
   _parent_id: Option<String>,
   _children_id: Option<Vec<String>>,
+}
+
+/// `Task::_commands` is a HashMap, so iterating it yields a different order on every pass.
+/// Anything that addresses a command by index (the log tabs, the task row) has to go
+/// through here or it will point at a different command from one frame to the next.
+pub fn sorted_commands(commands: &HashMap<String, TaskCommand>) -> Vec<&TaskCommand> {
+  let mut out: Vec<&TaskCommand> = commands.values().collect();
+  out.sort_by(|a, b| {
+    a._command
+      .to_string()
+      .cmp(&b._command.to_string())
+      .then_with(|| a._id.cmp(&b._id))
+  });
+  out
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

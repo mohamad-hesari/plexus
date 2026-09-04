@@ -219,7 +219,7 @@ pub async fn init_default_config() -> Config {
     )
   });
   let root_project_name = root_package_json["name"].as_str().unwrap_or("").to_string();
-  let cmd = Command::new("pnpm")
+  let cmd = Command::new(crate::pnpm_bin::pnpm_or_exit())
     .arg("list")
     .arg("--recursive")
     .arg("--depth=-1")
@@ -265,7 +265,7 @@ pub async fn init_default_config() -> Config {
 
     projects.push(ConfigProject {
       name,
-      path: normalized_path.to_str().unwrap_or("").to_string(),
+      path: normalized_path.to_string_lossy().replace('\\', "/"),
       depends_on: if dependencies.is_empty() {
         OptionConfig::None(false)
       } else {

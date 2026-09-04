@@ -342,9 +342,10 @@ async fn main() {
         });
       }
       if cli.tui {
-        let tui_manager = Arc::new(tui_managerv2::TuiManager::new(
+        let tui_manager = Arc::new(tui_managerv2::TuiManager::with_mouse(
           Arc::clone(&task_manager),
           Arc::clone(&is_running),
+          cli.mouse,
         ));
         set.spawn(async move {
           tui_manager.main_loop().await;

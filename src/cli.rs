@@ -144,6 +144,13 @@ pub struct RunArgs {
   pub show_colors: bool,
 
   #[arg(
+    long,
+    default_value = "false",
+    help = "Capture the mouse in the TUI. Wheel scrolling works without this in most terminals via alternate scroll; turning capture on gives click-to-select tabs but disables your terminal's own text selection. Toggle it at runtime with 'm'."
+  )]
+  pub mouse: bool,
+
+  #[arg(
     short,
     long,
     default_value = "false",

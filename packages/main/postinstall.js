@@ -1,41 +1,57 @@
 #!/usr/bin/env node
+
+// Generating the config schema is a convenience, not a requirement. Nothing in here may
+// fail the install: a non-zero exit from a postinstall script aborts `npm install` for the
+// whole project, and this used to happen on Windows whenever the platform binary package
+// was skipped.
+
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { findBinary, githubName, normalName } = require("./find_binary");
+const { findBinary, explainMissingBinary } = require("./find_binary");
 
-const binaryPath = findBinary();
-
-if (!binaryPath) {
-  console.error(
-    `Error: Plexus could not find binary package: ${normalName} or ${githubName}`,
-  );
-  process.exit(1);
+function warn(message) {
+  console.warn(`plexus: ${message}`);
 }
 
 try {
-  const projectRoot = process.env.INIT_CWD || process.cwd();
-  const targetFolder = path.join(projectRoot, "node_modules");
-  if (!fs.existsSync(targetFolder)) {
-    console.error(
-      "⚠️ Target folder for config schema does not exist:",
-      targetFolder,
-    );
-    process.exit(1);
-  }
-  const outputPath = path.join(targetFolder, "plexus.schema.json");
-  const child = spawn(binaryPath, ["print-schema", "--output", outputPath], {
-    stdio: "inherit",
-  });
-  child.on("exit", (code) => {
-    if (code === 0) {
-      console.log("✅ Config schema generated successfully at:", outputPath);
+  const binaryPath = findBinary();
+
+  if (!binaryPath) {
+    warn(explainMissingBinary());
+    warn("Skipping config schema generation.");
+    process.exitCode = 0;
+  } else {
+    const projectRoot = process.env.INIT_CWD || process.cwd();
+    const targetFolder = path.join(projectRoot, "node_modules");
+
+    if (!fs.existsSync(targetFolder)) {
+      warn(`No node_modules at ${targetFolder}, skipping config schema generation.`);
+      process.exitCode = 0;
+    } else {
+      const outputPath = path.join(targetFolder, "plexus.schema.json");
+      const child = spawn(binaryPath, ["print-schema", "--output", outputPath], {
+        stdio: "inherit",
+        windowsHide: true,
+      });
+
+      child.on("error", (err) => {
+        warn(`Could not run ${binaryPath}: ${err.message}`);
+        warn("Skipping config schema generation.");
+        process.exitCode = 0;
+      });
+
+      child.on("exit", (code) => {
+        if (code === 0) {
+          console.log(`plexus: config schema written to ${outputPath}`);
+        } else {
+          warn(`Config schema generation exited with ${code}, continuing anyway.`);
+        }
+        process.exitCode = 0;
+      });
     }
-    process.exit(code || 0);
-  });
+  }
 } catch (error) {
-  console.error(
-    "⚠️ Failed to generate config schema during postinstall:",
-    error.message,
-  );
+  warn(`Config schema generation failed: ${error.message}`);
+  process.exitCode = 0;
 }

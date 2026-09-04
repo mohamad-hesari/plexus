@@ -6,6 +6,7 @@ pub mod env;
 pub mod hmr_websocket;
 pub mod log_view;
 pub mod pnpm;
+pub mod pnpm_bin;
 pub mod task_manager;
 pub mod task_managerv2;
 pub mod tui_manager;

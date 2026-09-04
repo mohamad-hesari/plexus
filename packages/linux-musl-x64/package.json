@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "description": "Musl Linux x64 binary for Plexus",
   "license": "MIT",
+  "files": [
+    "bin",
+    "LICENSE",
+    "README.md"
+  ],
   "os": [
     "linux"
   ],

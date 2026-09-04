@@ -82,7 +82,13 @@ jobs:
           cd packages/${{ matrix.pkg_name }}
           jq ".version = \"${{ env.VERSION }}\"" package.json > temp.json && mv temp.json package.json
           mkdir -p bin
-          cp ../../target/${{ matrix.target }}/release/plexus* ./bin/ 2>/dev/null || cp ../../target/${{ matrix.target }}/release/plexus.exe ./bin/
+          # Copy the binary only. A glob also picks up plexus.pdb and plexus.d on Windows,
+          # and the depfile embeds absolute build-machine paths.
+          if [ -f "../../target/${{ matrix.target }}/release/plexus.exe" ]; then
+            cp "../../target/${{ matrix.target }}/release/plexus.exe" ./bin/
+          else
+            cp "../../target/${{ matrix.target }}/release/plexus" ./bin/
+          fi
 
       - name: Publish to NPM
         working-directory: packages/${{ matrix.pkg_name }}
