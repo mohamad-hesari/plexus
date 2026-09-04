@@ -422,13 +422,18 @@ impl TaskManager {
         break;
       }
       if !_watch_mode {
-        if self._store.is_all_finished().await {
-          debug!("Not in watch mode, exiting main loop");
-          break;
-        }
+        // Check for failure BEFORE checking for completion. TaskStatus::is_finished counts
+        // Failed alongside Successed, so when the failing command is among the last to
+        // finish, is_all_finished goes true on the same poll and the old order broke out
+        // with result still true. A one-package build that failed reported success, which
+        // is exactly the shape CI runs.
         if self._store.is_any_failed().await {
           debug!("Not in watch mode, exiting main loop with failure");
           result = false;
+          break;
+        }
+        if self._store.is_all_finished().await {
+          debug!("Not in watch mode, exiting main loop");
           break;
         }
       } else {
@@ -1335,4 +1340,102 @@ impl Display for TaskStatus {
 pub enum InternalTaskStatus {
   Running,
   Other,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn task_with(name: &str, commands: &[&str]) -> Task {
+    Task::new(
+      uuid(),
+      name.to_string(),
+      format!("packages/{name}"),
+      commands.iter().map(|c| ConfigCommand::Simple(c.to_string())).collect(),
+      None,
+      None,
+    )
+  }
+
+  /// The trap behind the exit-code bug: `Failed` is a finished state, so a run where the
+  /// last command fails satisfies `is_all_finished` and `is_any_failed` on the same poll.
+  /// `main_loop` must therefore test for failure first, or it breaks out reporting success.
+  #[tokio::test]
+  async fn a_failed_run_is_both_finished_and_failed() {
+    let store = TaskStore::new(false);
+    let task = task_with("core", &["build"]);
+    let cmd_id = task._commands.keys().next().unwrap().clone();
+    store.add_task(task).await;
+
+    store.set_status(&cmd_id, TaskStatus::Failed).await;
+
+    assert!(store.is_any_failed().await, "the run failed");
+    assert!(
+      store.is_all_finished().await,
+      "Failed counts as finished, which is exactly why the failure check has to come first"
+    );
+  }
+
+  #[tokio::test]
+  async fn a_clean_run_is_finished_and_not_failed() {
+    let store = TaskStore::new(false);
+    let task = task_with("core", &["build", "tsc"]);
+    let ids: Vec<String> = task._commands.keys().cloned().collect();
+    store.add_task(task).await;
+
+    for id in &ids {
+      store.set_status(id, TaskStatus::Successed).await;
+    }
+
+    assert!(!store.is_any_failed().await);
+    assert!(store.is_all_finished().await);
+  }
+
+  #[tokio::test]
+  async fn a_failure_is_visible_while_other_commands_still_run() {
+    let store = TaskStore::new(false);
+    let task = task_with("core", &["build", "tsc"]);
+    let ids: Vec<String> = task._commands.keys().cloned().collect();
+    store.add_task(task).await;
+
+    store.set_status(&ids[0], TaskStatus::Failed).await;
+    store.set_status(&ids[1], TaskStatus::Running).await;
+
+    assert!(store.is_any_failed().await);
+    assert!(!store.is_all_finished().await, "one command is still running");
+  }
+
+  /// A command that could not be spawned reports Failed, so a missing pnpm ends the run
+  /// with a non-zero exit rather than a panic or a silent success.
+  #[tokio::test]
+  async fn an_unspawnable_command_fails_the_run() {
+    let store = TaskStore::new(false);
+    let task = task_with("core", &["build"]);
+    let cmd_id = task._commands.keys().next().unwrap().clone();
+    store.add_task(task).await;
+
+    store.set_status(&cmd_id, TaskStatus::Failed).await;
+    assert!(store.is_any_failed().await);
+  }
+
+  #[test]
+  fn sorted_commands_is_stable_across_calls() {
+    let task = task_with("page-builder", &["tsc", "build", "lint"]);
+    let first: Vec<String> = sorted_commands(&task._commands)
+      .iter()
+      .map(|c| c._id.clone())
+      .collect();
+    for _ in 0..20 {
+      let again: Vec<String> = sorted_commands(&task._commands)
+        .iter()
+        .map(|c| c._id.clone())
+        .collect();
+      assert_eq!(first, again, "HashMap iteration order must not leak into the order");
+    }
+    let names: Vec<String> = sorted_commands(&task._commands)
+      .iter()
+      .map(|c| c._command.to_string())
+      .collect();
+    assert_eq!(names, vec!["build", "lint", "tsc"]);
+  }
 }

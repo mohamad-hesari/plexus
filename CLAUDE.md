@@ -184,11 +184,31 @@ Send keys as raw bytes (`b"\r"`, `b"\x1b"` for Esc, `b"\x1b[6~"` for PageDown,
 focus stack and the terminal mode sequences were all checked, and it catches layout problems
 that no unit test will.
 
+## Headless mode is the CI path
+
+`plexus run` without `-t` and without `-W` is how a monorepo's `build`, `tsc`, `lint` and
+`format` scripts call it, so the exit code is the whole product there. In `TaskManager::main_loop`,
+the `!_watch_mode` branch must test `is_any_failed()` **before** `is_all_finished()`.
+`TaskStatus::is_finished` counts `Failed` alongside `Successed`, so both go true on the same
+poll when the failing command is among the last to finish, and checking completion first
+breaks out reporting success. That reported green for a one-package build that failed, and
+for any run where a top-level app failed last. `a_failed_run_is_both_finished_and_failed`
+pins the invariant.
+
+Anything that makes a command unspawnable, a missing pnpm included, sets `Failed`, so those
+end the run with a non-zero exit rather than a panic or a silent pass.
+
+When changing this loop, check both shapes: a failure early in the graph (dependents stay
+`Init`, so `is_all_finished` is false and the old order happened to work) and a failure in
+whatever finishes last (where it did not).
+
 ## Known issues
 
-`plexus run` exits 0 when a command fails. In `TaskManager::main_loop`, `is_all_finished()`
-counts `Failed` as finished and is checked before `is_any_failed()`, so the loop breaks with
-`result = true`. Swapping the two checks fixes it. This matters for CI.
+`-S` / `--seq` hangs. `get_runnable_commands` filters by `_commands.values().enumerate()`
+index, but `_commands` is a `HashMap`, so the index it compares against `min_index` is
+arbitrary and no command ever matches. The loop then spins forever, since nothing is
+runnable, nothing failed and not everything finished. Fixing it means indexing the sequential
+order off `sorted_commands` instead of raw HashMap iteration.
 
 Watch mode registers each existing depth-1 child of a package directory individually rather
 than the directory itself, so a brand new file created directly at the package root is not
