@@ -20,6 +20,7 @@ use plexus::{
   app::App,
   cli::{Commands, NewCli},
   config::{Config, init_default_config},
+  control,
   task_manager::TaskManager,
   task_managerv2::{self},
   tui_manager::TuiManager,
@@ -269,6 +270,12 @@ async fn main() {
       }
       return;
     }
+    Commands::Skills(args) => {
+      std::process::exit(plexus::skills::run(args));
+    }
+    Commands::Client(args) => {
+      std::process::exit(control::client::run(args).await);
+    }
     Commands::Config(args) => {
       if args.share.cwd.is_some() {
         std::env::set_current_dir(args.share.cwd.unwrap()).expect("Failed to change working directory");
@@ -305,6 +312,29 @@ async fn main() {
       if cli.run_share.cwd.is_some() {
         std::env::set_current_dir(cli.run_share.cwd.unwrap()).expect("Failed to change working directory");
       }
+      let control_bound = if cli.watch {
+        let opts = control::server::ServerOptions {
+          root: std::env::current_dir().expect("Failed to read working directory"),
+          mode: cli.socket_mode,
+          tcp: cli.control_tcp.clone(),
+        };
+        match control::server::bind(&opts).await {
+          Ok(bound) => Some(bound),
+          Err(control::transport::BindError::AlreadyRunning(at)) => {
+            eprintln!("plexus is already running in this project ({}); stop it first", at);
+            std::process::exit(1);
+          }
+          Err(e) => {
+            error!("Control socket disabled: {}", e);
+            None
+          }
+        }
+      } else {
+        None
+      };
+      if let Some(addr) = control_bound.as_ref().and_then(|b| b.tcp_addr()) {
+        info!("Control TCP listening on {}", addr);
+      }
       let config_path = cli.config_path.clone();
       let use_file_config = config_path.is_some_and(|f| Path::new(&f).exists());
       let is_running = Arc::new(AtomicBool::new(true));
@@ -339,6 +369,17 @@ async fn main() {
         ));
         set.spawn(async move {
           watch_manager.main_loop().await;
+        });
+      }
+      if let Some(bound) = control_bound {
+        let server = control::server::ControlServer::new(Arc::clone(&task_manager), Arc::clone(&is_running));
+        set.spawn(async move {
+          server.main_loop(bound).await;
+        });
+        let store = task_manager.get_store();
+        let running = Arc::clone(&is_running);
+        set.spawn(async move {
+          control::ports::main_loop(store, running).await;
         });
       }
       if cli.tui {

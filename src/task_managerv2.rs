@@ -636,6 +636,7 @@ impl TaskRunner {
     };
 
     debug!(%task_name, "Process started for task");
+    store.set_pid(&cmd_id, child.id()).await;
 
     store.set_status(&cmd_id, TaskStatus::Running).await;
 
@@ -733,6 +734,7 @@ impl TaskRunner {
       finished_status = TaskStatus::Stopped;
     }
     debug!(%cmd_id, %task_name, status = ?finished_status, "Finished running task");
+    self._store.set_pid(&cmd_id, None).await;
     self._store.set_status(&cmd_id, finished_status.clone()).await;
     // finished_status.clone()
     //   });
@@ -767,11 +769,22 @@ impl TaskRunner {
   }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PortInfo {
+  pub addr: std::net::SocketAddr,
+  pub pid: u32,
+  pub process: String,
+  pub alive: bool,
+}
+
 pub struct TaskStore {
   _tasks: Arc<RwLock<HashMap<String, Task>>>,
   _statuses: Arc<RwLock<HashMap<String, TaskStatus>>>,
   _logs: Arc<RwLock<HashMap<String, Vec<String>>>>,
   _last_run_time: Arc<RwLock<HashMap<String, DateTime<Utc>>>>,
+  _pids: Arc<RwLock<HashMap<String, u32>>>,
+  _ports: Arc<RwLock<HashMap<String, Vec<PortInfo>>>>,
+  _runs: Arc<RwLock<HashMap<String, u64>>>,
   _show_colors: bool,
 }
 
@@ -783,7 +796,60 @@ impl TaskStore {
       _show_colors: show_colors,
       _logs: Arc::new(RwLock::new(HashMap::new())),
       _last_run_time: Arc::new(RwLock::new(HashMap::new())),
+      _pids: Arc::new(RwLock::new(HashMap::new())),
+      _ports: Arc::new(RwLock::new(HashMap::new())),
+      _runs: Arc::new(RwLock::new(HashMap::new())),
     }
+  }
+
+  pub async fn set_pid(&self, cmd_id: &str, pid: Option<u32>) {
+    let mut pids = self._pids.write().await;
+    match pid {
+      Some(pid) => {
+        pids.insert(cmd_id.to_string(), pid);
+      }
+      None => {
+        pids.remove(cmd_id);
+        drop(pids);
+        self._ports.write().await.remove(cmd_id);
+      }
+    }
+  }
+
+  pub async fn get_pids(&self) -> HashMap<String, u32> {
+    self._pids.read().await.clone()
+  }
+
+  pub async fn get_pid(&self, cmd_id: &str) -> Option<u32> {
+    self._pids.read().await.get(cmd_id).copied()
+  }
+
+  pub async fn set_ports(&self, ports: HashMap<String, Vec<PortInfo>>) {
+    let pids = self._pids.read().await;
+    let mut store = self._ports.write().await;
+    *store = ports.into_iter().filter(|(id, _)| pids.contains_key(id)).collect();
+  }
+
+  pub async fn get_ports(&self, cmd_id: &str) -> Vec<PortInfo> {
+    self._ports.read().await.get(cmd_id).cloned().unwrap_or_default()
+  }
+
+  /// Increments every time the command enters `Starting`, so a waiter can tell its own run
+  /// apart from a later one triggered by a file change.
+  pub async fn get_run(&self, cmd_id: &str) -> u64 {
+    self._runs.read().await.get(cmd_id).copied().unwrap_or(0)
+  }
+
+  pub async fn log_len(&self, cmd_id: &str) -> usize {
+    self._logs.read().await.get(cmd_id).map_or(0, |l| l.len())
+  }
+
+  pub async fn get_logs_from(&self, cmd_id: &str, from: usize) -> Vec<String> {
+    let logs = self._logs.read().await;
+    logs
+      .get(cmd_id)
+      .map(|l| l.get(from.min(l.len())..).unwrap_or_default().to_vec())
+      .unwrap_or_default()
   }
 
   pub async fn add_task(&self, task: Task) {
@@ -893,6 +959,21 @@ impl TaskStore {
       }
     }
     runnable_cmds
+  }
+
+  /// Name of a dependency whose same-named command failed, which keeps this command in `Init`
+  /// until something reruns the dependency.
+  pub async fn failed_dependency(&self, task_id: &str, cmd_id: &str) -> Option<String> {
+    let tasks = self._tasks.read().await;
+    let task = tasks.get(task_id)?;
+    let cmd = task._commands.get(cmd_id)?;
+    for child_id in task._children_id.iter().flatten() {
+      let Some(child) = tasks.get(child_id) else { continue };
+      if child._commands.values().any(|c| c == cmd && c._status.is_failed()) {
+        return Some(child._name.clone());
+      }
+    }
+    None
   }
 
   pub async fn get_task_command(&self, task_id: &str, command_id: &str) -> TaskCommand {
@@ -1026,6 +1107,9 @@ impl TaskStore {
     statuses.insert(id.to_string(), status.clone());
     drop(statuses);
     drop(tasks);
+    if status.is_starting() {
+      *self._runs.write().await.entry(id.to_string()).or_insert(0) += 1;
+    }
   }
 
   pub async fn get_status(&self, id: &str) -> TaskStatus {
@@ -1065,6 +1149,15 @@ pub struct TaskPlexusCommand {
 pub enum TaskCommandType {
   Simple(String),
   Plexus(TaskPlexusCommand),
+}
+
+impl TaskCommandType {
+  pub fn script(&self) -> &str {
+    match self {
+      TaskCommandType::Simple(cmd) => cmd,
+      TaskCommandType::Plexus(plexus_cmd) => &plexus_cmd.command,
+    }
+  }
 }
 
 impl Display for TaskCommandType {
@@ -1211,6 +1304,10 @@ pub struct TaskWithDetails {
 }
 
 impl Task {
+  pub fn path(&self) -> &str {
+    &self._path
+  }
+
   pub fn new(
     id: String,
     name: String,
@@ -1421,15 +1518,9 @@ mod tests {
   #[test]
   fn sorted_commands_is_stable_across_calls() {
     let task = task_with("page-builder", &["tsc", "build", "lint"]);
-    let first: Vec<String> = sorted_commands(&task._commands)
-      .iter()
-      .map(|c| c._id.clone())
-      .collect();
+    let first: Vec<String> = sorted_commands(&task._commands).iter().map(|c| c._id.clone()).collect();
     for _ in 0..20 {
-      let again: Vec<String> = sorted_commands(&task._commands)
-        .iter()
-        .map(|c| c._id.clone())
-        .collect();
+      let again: Vec<String> = sorted_commands(&task._commands).iter().map(|c| c._id.clone()).collect();
       assert_eq!(first, again, "HashMap iteration order must not leak into the order");
     }
     let names: Vec<String> = sorted_commands(&task._commands)

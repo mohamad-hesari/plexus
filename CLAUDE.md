@@ -46,7 +46,9 @@ main.rs (Commands::Run)
   ├── watch_managerv2.rs  file watching
   ├── hmr_websocket.rs    localhost websocket for HMR clients
   ├── env.rs              .env / .env.local / .env.<command> loading
-  └── pnpm_bin.rs         resolves the pnpm executable once
+  ├── pnpm_bin.rs         resolves the pnpm executable once
+  ├── control/            control socket (watch mode only) and `plexus client`
+  └── skills.rs           `plexus skills`: agent docs from src/skills/*.md, baked in with include_str!
 ```
 
 Dead, kept around but never executed: `app.rs`, `app_state.rs`, `task_manager.rs`,
@@ -60,7 +62,9 @@ That is the only thing keeping the v1 file compiled.
 
 Field names carry a leading underscore (`_id`, `_commands`, `_status`) as a house style, not
 because they are unused. `tokio_select!` comes from `better_tokio_select` and is imported
-via `#[macro_use]` in `lib.rs`.
+via `#[macro_use]` in `lib.rs`. Its `_ =>` arm is tokio's `else`: it runs only when every other branch is
+disabled, never as a timeout. A loop that must notice `is_running` going false needs an explicit
+`.. if let _ = sleep(..) =>` arm, or it blocks on its other branches.
 
 ## Domain model
 
@@ -140,6 +144,48 @@ under tmux 3.7:
 So under tmux the wheel needs both `set -g mouse on` in tmux and capture on in plexus. The
 `m` handler mentions the tmux half when `$TMUX` is set, since that is the part nothing in
 plexus can fix.
+
+## Control socket and `plexus client`
+
+With `-W`, plexus serves a control endpoint inside the project so tools in a container that
+bind-mounts the repo, or an agent on the same machine, can drive the running session:
+
+```bash
+plexus client list                      # packages from -f, commands from -C; nothing else is reachable
+plexus client status [pkg[:cmd]]        # status, pid, discovered ports
+plexus client restart web:tsc           # streams the run, exits 0/1 like tsc itself
+plexus client start web:dev --no-wait   # long-lived commands never finish, so don't wait
+plexus client logs web:dev -f -n 50
+plexus client forward web 3000 --listen 127.0.0.1:3000 --detach
+plexus client forwards / unforward <id | pkg[:port] | --all>
+```
+
+`--json` prints one object per line. Exit code 2 means no plexus was reachable.
+
+- Endpoint: Unix `node_modules/plexus.sock` (mode from `--socket-mode`, default 600); Windows
+  `\\.\pipe\plexus_<hash of root>` with that name in `node_modules/plexus.name`. Both go through
+  `interprocess`. `--control-tcp ADDR` adds a TCP listener, writes `plexus.port` and
+  `plexus.token`, and every TCP request must carry the token.
+- `sun_path` is 108 bytes, so on Linux a long socket path is bound and dialled through
+  `/proc/self/fd/<dirfd>/plexus.sock`. That is also why `reclaim_name` is off and cleanup unlinks
+  the real path itself. macOS errors out on a long path instead.
+- Binding happens before tasks load. A socket that answers means another plexus owns the
+  project and the run exits 1; one that refuses is stale and gets replaced. The server re-binds
+  if pnpm wipes `node_modules` underneath it.
+- Ports: `control/ports.rs` walks each running command's process tree with `sysinfo` every 2s and
+  matches TCP listeners from `listeners` (not netstat2: it panics without `/proc` and needs
+  libclang on macOS). `Connect` only dials ports discovered for that package.
+- A forward is a client-side TCP listener that opens one socket connection per accepted TCP
+  connection. It registers with the server, and `unforward` stops it through that registration,
+  because container PIDs are not host PIDs. It also exits when plexus goes away.
+- Under Incus this works from a system container, not a VM. In an unprivileged container the
+  client uid is shifted, so the mount needs `shift=true` or the socket a wider `--socket-mode`.
+- interprocess 2.4.9 calls a tokio API newer than its declared minimum, hence `tokio = "1.54"`.
+- Agent docs for all of this live in `src/skills/` and are served by `plexus skills get`. Write
+  `{{plexus}}` for the command (it becomes `--cmd`), and link references by command, never by
+  path. Tests fail if a `client` subcommand or flag is missing from them, or a link points
+  nowhere, so a CLI change has to update those docs too. A new doc also needs an entry in
+  `SKILLS` in `skills.rs`.
 
 ## Cross-platform notes
 

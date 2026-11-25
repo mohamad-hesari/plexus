@@ -111,6 +111,10 @@ pub struct NewCli {
 pub enum Commands {
   Run(RunArgs),
   Config(ConfigArgs),
+  /// Talk to a `plexus run -W` running in this project: tasks, logs, start/stop, ports.
+  Client(ClientArgs),
+  /// Instructions for AI agents, printed from this binary so they match its version.
+  Skills(SkillsArgs),
   #[command(hide = true)]
   PrintSchema(PrintSchemaArgs),
 }
@@ -229,6 +233,143 @@ pub struct RunArgs {
     help = "This is only effective when the build-depends-on flag is set to true, and filters commands that depend on the changed tasks"
   )]
   pub depends_on: Option<Vec<String>>,
+
+  #[arg(
+    long,
+    default_value = "600",
+    value_parser = parse_mode,
+    help = "Octal permission bits for node_modules/plexus.sock and plexus.token in watch mode (Unix only). Inside an unprivileged container the client's uid is shifted, so either map it (incus: shift=true) or widen this, e.g. 666"
+  )]
+  pub socket_mode: u32,
+
+  #[arg(
+    long,
+    value_name = "ADDR:PORT",
+    help = "In watch mode, also accept control connections over TCP (e.g. 0.0.0.0:0). Writes node_modules/plexus.port and a token to node_modules/plexus.token; clients pass --tcp and need the token"
+  )]
+  pub control_tcp: Option<String>,
+}
+
+fn parse_mode(s: &str) -> Result<u32, String> {
+  u32::from_str_radix(s.trim_start_matches("0o"), 8)
+    .ok()
+    .filter(|m| *m <= 0o777)
+    .ok_or_else(|| format!("'{}' is not an octal mode like 600", s))
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ClientArgs {
+  #[arg(
+    long,
+    global = true,
+    help = "Project root; default is the first directory upwards with a running plexus"
+  )]
+  pub root: Option<String>,
+
+  #[arg(
+    long,
+    global = true,
+    help = "Socket path (Unix) or pipe name (Windows) to connect to directly"
+  )]
+  pub socket: Option<String>,
+
+  #[arg(
+    long,
+    global = true,
+    value_name = "HOST:PORT",
+    help = "Connect over TCP to a plexus started with --control-tcp"
+  )]
+  pub tcp: Option<String>,
+
+  #[arg(
+    long,
+    global = true,
+    help = "Token file for --tcp; default is node_modules/plexus.token found upwards"
+  )]
+  pub token_file: Option<String>,
+
+  #[arg(long, global = true, help = "Print one JSON object per line instead of text")]
+  pub json: bool,
+
+  #[command(subcommand)]
+  pub action: ClientAction,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SkillsArgs {
+  #[arg(
+    long,
+    global = true,
+    help = "Command to show in the text instead of `plexus`, e.g. \"pnpm exec plexus\""
+  )]
+  pub cmd: Option<String>,
+
+  #[command(subcommand)]
+  pub action: SkillsAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum SkillsAction {
+  /// Available skills and reference docs.
+  List {
+    #[arg(long)]
+    json: bool,
+  },
+  /// Print a skill (as SKILL.md) or reference doc; without a slug, how to use them.
+  Get { slug: Option<String> },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ClientAction {
+  /// Packages loaded with -f and the commands loaded with -C.
+  List,
+  /// Status, pid and listening ports of each command. TARGET is `pkg` or `pkg:command`.
+  Status { target: Option<String> },
+  /// Print a command's output.
+  Logs {
+    target: String,
+    #[arg(short, long, help = "Keep streaming new output")]
+    follow: bool,
+    #[arg(short = 'n', long, help = "Only the last N lines")]
+    tail: Option<usize>,
+  },
+  /// Start a command and stream its run; exits 0 if it succeeds.
+  Start {
+    target: String,
+    #[arg(long, help = "Return right after triggering (use for long-lived commands like dev)")]
+    no_wait: bool,
+  },
+  /// Stop a running command.
+  Stop { target: String },
+  /// Restart a command and stream the new run; exits 0 if it succeeds.
+  Restart {
+    target: String,
+    #[arg(long, help = "Return right after triggering (use for long-lived commands like dev)")]
+    no_wait: bool,
+  },
+  /// Listening TCP ports discovered under each command's process tree.
+  Ports { target: Option<String> },
+  /// Listen locally and relay every connection to PORT of PACKAGE through plexus.
+  Forward {
+    package: String,
+    port: u16,
+    #[arg(
+      long,
+      value_name = "ADDR:PORT",
+      help = "Local listen address, default 127.0.0.1:<PORT>"
+    )]
+    listen: Option<String>,
+    #[arg(long, help = "Run in the background and return once the forward is up")]
+    detach: bool,
+  },
+  /// Active forwards.
+  Forwards,
+  /// Stop forwards by id, by `pkg` or `pkg:port`, or all of them.
+  Unforward {
+    selector: Option<String>,
+    #[arg(long)]
+    all: bool,
+  },
 }
 
 #[derive(Args, Debug, Clone)]
