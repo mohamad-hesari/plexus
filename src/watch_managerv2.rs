@@ -146,8 +146,11 @@ impl WatchManager {
             d.task_id, d.task_path
           );
           include_set.add(
-            Glob::new(&format!("{}/**/*", escape_glob_literal(&normalize_for_glob(&d.task_path))))
-              .expect("Invalid glob pattern"),
+            Glob::new(&format!(
+              "{}/**/*",
+              escape_glob_literal(&normalize_for_glob(&d.task_path))
+            ))
+            .expect("Invalid glob pattern"),
           );
         }
       } else {
@@ -250,8 +253,7 @@ impl WatchManager {
               break;
             }
           }
-          _ => {
-            sleep(Duration::from_millis(100)).await;
+          .. if let _ = sleep(Duration::from_millis(100)) => {
             yield_now().await;
           }
         }
