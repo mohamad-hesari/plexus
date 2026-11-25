@@ -21,9 +21,7 @@ use command_group::AsyncCommandGroup;
 static ENV_KEY_RE: OnceLock<regex::Regex> = OnceLock::new();
 
 fn get_env_key_re() -> &'static regex::Regex {
-  ENV_KEY_RE.get_or_init(|| {
-    regex::Regex::new(r"^\s*([A-Z_][A-Z0-9_]*)\s*=([^\n]*)").unwrap()
-  })
+  ENV_KEY_RE.get_or_init(|| regex::Regex::new(r"^\s*([A-Z_][A-Z0-9_]*)\s*=([^\n]*)").unwrap())
 }
 
 async fn get_env_from_file(path: &Path, envs: &mut HashMap<String, String>) {
@@ -53,20 +51,9 @@ async fn get_envs(path: &str) -> HashMap<String, String> {
     .unwrap_or_else(|_| panic!("Failed to get current directory for task"))
     .display()
     .to_string();
-  get_env_from_file(
-    Path::new(current_path.as_str())
-      .join(".env.local")
-      .as_path(),
-    &mut envs,
-  )
-  .await;
-  get_env_from_file(
-    Path::new(current_path.as_str()).join(".env").as_path(),
-    &mut envs,
-  )
-  .await;
-  get_env_from_file(Path::new(path).join(".env.local").as_path(), &mut envs)
-    .await;
+  get_env_from_file(Path::new(current_path.as_str()).join(".env.local").as_path(), &mut envs).await;
+  get_env_from_file(Path::new(current_path.as_str()).join(".env").as_path(), &mut envs).await;
+  get_env_from_file(Path::new(path).join(".env.local").as_path(), &mut envs).await;
   get_env_from_file(Path::new(path).join(".env").as_path(), &mut envs).await;
   envs
 }
@@ -83,10 +70,7 @@ impl TaskManager for App {
     debug!("init tasks");
     let mut pnpm_lock = self.pnpm.lock().await;
     pnpm_lock.load_projects(&self.cli.filter, 0).await;
-    println!(
-      "Loaded {} projects from pnpm-lock.yaml",
-      pnpm_lock.projects().len()
-    );
+    println!("Loaded {} projects from pnpm-lock.yaml", pnpm_lock.projects().len());
     let mut tasks = self.tasks.lock().await;
     let mut tasks_map = HashMap::new();
     for (name, project) in pnpm_lock.projects() {
@@ -129,12 +113,7 @@ impl TaskManager for App {
     let pnpm = Arc::clone(&self.pnpm);
     let project_names = {
       let pnpm_lock = pnpm.lock().await;
-      pnpm_lock
-        .projects()
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ")
+      pnpm_lock.projects().keys().cloned().collect::<Vec<_>>().join(", ")
     };
     debug!(
         %project_names,
@@ -142,131 +121,129 @@ impl TaskManager for App {
     );
     let app_tasks = Arc::clone(&self.tasks);
     let aborts = Arc::clone(&self.aborts);
-    let avaiable_tasks =
-      self.tasks.lock().await.keys().cloned().collect::<Vec<_>>();
+    let avaiable_tasks = self.tasks.lock().await.keys().cloned().collect::<Vec<_>>();
     let mut rx_status_changes = self.state.get_status_change_receiver();
     let is_watching_flag = self.cli.watch;
-    self.state
-            .spawn(async move {
-                let mut all_started_once = false;
-                loop {
-                    if !state.is_running() {
-                        debug!("App is not running, exiting task manager loop");
-                        break;
-                    }
-                    for task_name in &tasks {
-                        let task = state.get_task_state(task_name).await;
-                        let (project_name, command) = task.name().split_once(':').unwrap();
-                        trace!(%task_name, %project_name, %command, status = ?task.status(), "Checking task");
-                        if *task.status() == TaskStatus::Initialized {
-                            let deps = {
-                                let pnpm_lock = pnpm.lock().await;
-                                let project =
-                                    pnpm_lock.projects().get(project_name).unwrap_or_else(|| {
-                                        panic!(
-                                            "Project {} not found for task {}",
-                                            task.name(),
-                                            task_name
-                                        )
-                                    });
+    self
+      .state
+      .spawn(async move {
+        let mut all_started_once = false;
+        loop {
+          if !state.is_running() {
+            debug!("App is not running, exiting task manager loop");
+            break;
+          }
+          for task_name in &tasks {
+            let task = state.get_task_state(task_name).await;
+            let (project_name, command) = task.name().split_once(':').unwrap();
+            trace!(%task_name, %project_name, %command, status = ?task.status(), "Checking task");
+            if *task.status() == TaskStatus::Initialized {
+              let deps = {
+                let pnpm_lock = pnpm.lock().await;
+                let project = pnpm_lock
+                  .projects()
+                  .get(project_name)
+                  .unwrap_or_else(|| panic!("Project {} not found for task {}", task.name(), task_name));
 
-                                project
-                                    .deps()
-                                    .iter()
-                                    .map(|name| format!("{}:{}", name, command))
-                                    .collect::<Vec<_>>()
-                            };
-                            let mut all_deps_finished = true;
-                            for dep in deps {
-                                if !avaiable_tasks.contains(&dep) {
-                                    debug!(%task_name, %dep, "Dependency task not found, skipping");
-                                    continue;
-                                }
-                                let dep_task = state.get_task_state(&dep).await;
-                                if *dep_task.status() != TaskStatus::Finished {
-                                    all_deps_finished = false;
-                                    break;
-                                }
-                            }
-                            if all_deps_finished {
-                                debug!(%task_name, "All dependencies finished, starting task");
-                                let app_task = {
-                                    let tasks = app_tasks.lock().await;
-                                    tasks.get(task_name).cloned()
-                                }
-                                .unwrap();
-                                let handle = state
-                                    .spawn(run_task(task.name().to_string(), Arc::clone(&app_task)))
-                                    .await;
-                                aborts.lock().await.insert(task_name.to_string(), handle);
-                                debug!(%task_name, "Task started");
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
-
-                    if !all_started_once {
-                        let mut all_started = true;
-
-                        for task_name in &tasks {
-                            let task = state.get_task_state(task_name).await;
-                            if *task.status() == TaskStatus::Initialized {
-                                trace!(%task_name, "Task has not been started yet");
-                                all_started = false;
-                            } else if *task.status() == TaskStatus::Failed
-                                && !is_watching_flag
-                            {
-                                debug!(%task_name, "Task has failed");
-                                    emit!(StateEvent::Failed);
-                                return;
-                            }
-                        }
-
-                        if all_started {
-                            all_started_once = true;
-                            debug!("All tasks have been started at least once");
-                        }
-                    }
-
-                    if all_started_once {
-                        if is_watching_flag {
-                            loop {
-                                if rx_status_changes.changed().await.is_err() { break; }
-
-                                let is_quit = rx_status_changes
-                                    .borrow_and_update()
-                                    .as_ref() // Look inside the Option
-                                    .map(|s| *s == StatusChangeEvent::StatusChanged) // Check the enum
-                                    .unwrap_or(false); // If None, it's not a quit event
-
-                                if is_quit { break; }
-                            }
-                        } else {
-                            loop {
-                                let mut all_finished = true;
-                                for task_name in &tasks {
-                                    let task = state.get_task_state(task_name).await;
-                                    if *task.status() == TaskStatus::Running {
-                                        all_finished = false;
-                                    } else if *task.status() == TaskStatus::Failed {
-                                        emit!(StateEvent::Failed);
-                                        return;
-                                    }
-                                }
-                                if all_finished {
-                                    debug!("All tasks finished, exiting task manager loop");
-                                    emit!(StateEvent::Quit);
-                                    return;
-                                }
-                            }
-                        }
-                    } else {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    }
+                project
+                  .deps()
+                  .iter()
+                  .map(|name| format!("{}:{}", name, command))
+                  .collect::<Vec<_>>()
+              };
+              let mut all_deps_finished = true;
+              for dep in deps {
+                if !avaiable_tasks.contains(&dep) {
+                  debug!(%task_name, %dep, "Dependency task not found, skipping");
+                  continue;
                 }
-            })
-            .await;
+                let dep_task = state.get_task_state(&dep).await;
+                if *dep_task.status() != TaskStatus::Finished {
+                  all_deps_finished = false;
+                  break;
+                }
+              }
+              if all_deps_finished {
+                debug!(%task_name, "All dependencies finished, starting task");
+                let app_task = {
+                  let tasks = app_tasks.lock().await;
+                  tasks.get(task_name).cloned()
+                }
+                .unwrap();
+                let handle = state
+                  .spawn(run_task(task.name().to_string(), Arc::clone(&app_task)))
+                  .await;
+                aborts.lock().await.insert(task_name.to_string(), handle);
+                debug!(%task_name, "Task started");
+              }
+            } else {
+              continue;
+            }
+          }
+
+          if !all_started_once {
+            let mut all_started = true;
+
+            for task_name in &tasks {
+              let task = state.get_task_state(task_name).await;
+              if *task.status() == TaskStatus::Initialized {
+                trace!(%task_name, "Task has not been started yet");
+                all_started = false;
+              } else if *task.status() == TaskStatus::Failed && !is_watching_flag {
+                debug!(%task_name, "Task has failed");
+                emit!(StateEvent::Failed);
+                return;
+              }
+            }
+
+            if all_started {
+              all_started_once = true;
+              debug!("All tasks have been started at least once");
+            }
+          }
+
+          if all_started_once {
+            if is_watching_flag {
+              loop {
+                if rx_status_changes.changed().await.is_err() {
+                  break;
+                }
+
+                let is_quit = rx_status_changes
+                  .borrow_and_update()
+                  .as_ref() // Look inside the Option
+                  .map(|s| *s == StatusChangeEvent::StatusChanged) // Check the enum
+                  .unwrap_or(false); // If None, it's not a quit event
+
+                if is_quit {
+                  break;
+                }
+              }
+            } else {
+              loop {
+                let mut all_finished = true;
+                for task_name in &tasks {
+                  let task = state.get_task_state(task_name).await;
+                  if *task.status() == TaskStatus::Running {
+                    all_finished = false;
+                  } else if *task.status() == TaskStatus::Failed {
+                    emit!(StateEvent::Failed);
+                    return;
+                  }
+                }
+                if all_finished {
+                  debug!("All tasks finished, exiting task manager loop");
+                  emit!(StateEvent::Quit);
+                  return;
+                }
+              }
+            }
+          } else {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+          }
+        }
+      })
+      .await;
     debug!("Task manager started");
   }
 
@@ -286,11 +263,7 @@ impl TaskManager for App {
       .state
       .spawn(run_task(task_name.to_string(), Arc::clone(&task)))
       .await;
-    self
-      .aborts
-      .lock()
-      .await
-      .insert(task_name.to_string(), handle);
+    self.aborts.lock().await.insert(task_name.to_string(), handle);
   }
 
   async fn stop_task(&self, task_name: &str) {
@@ -300,9 +273,10 @@ impl TaskManager for App {
       tasks.get(task_name).cloned()
     }
     .unwrap_or_else(|| panic!("Task {} not found", task_name));
-    task.sx.send(()).unwrap_or_else(|_| {
-      panic!("Failed to send stop signal to task {}", task_name)
-    });
+    task
+      .sx
+      .send(())
+      .unwrap_or_else(|_| panic!("Failed to send stop signal to task {}", task_name));
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -318,10 +292,7 @@ impl TaskManager for App {
   }
 }
 
-fn run_task(
-  task_name: String,
-  task: Arc<AppTask>,
-) -> impl Future<Output = ()> + Send {
+fn run_task(task_name: String, task: Arc<AppTask>) -> impl Future<Output = ()> + Send {
   let task_name_thread = Arc::new(task_name.to_string());
   debug!(%task_name_thread, "Spawning task");
   async move {

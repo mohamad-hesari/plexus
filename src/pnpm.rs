@@ -16,12 +16,7 @@ pub struct Project {
 }
 
 impl Project {
-  pub fn new(
-    name: String,
-    path: String,
-    deps: Vec<String>,
-    scripts: Vec<String>,
-  ) -> Self {
+  pub fn new(name: String, path: String, deps: Vec<String>, scripts: Vec<String>) -> Self {
     Self {
       _name: name,
       _path: path,
@@ -78,15 +73,11 @@ impl Pnpm {
           path.push(".plexus");
           path.push(project_hash);
           if path.exists() {
-            debug!(
-              "Cache hit for pnpm projects, loading from {}",
-              path.display()
-            );
+            debug!("Cache hit for pnpm projects, loading from {}", path.display());
             match fs::read_to_string(&path).await {
               Ok(contents) => {
                 let cached_projects: Vec<Project> =
-                  serde_json::from_str(&contents)
-                    .expect("Failed to parse cached projects");
+                  serde_json::from_str(&contents).expect("Failed to parse cached projects");
                 for project in cached_projects {
                   self._projects.insert(project.name().to_string(), project);
                 }
@@ -102,9 +93,7 @@ impl Pnpm {
       }
     }
     if counter > 10 {
-      eprintln!(
-        "Too many recursive calls to load_projects, possible circular dependency"
-      );
+      eprintln!("Too many recursive calls to load_projects, possible circular dependency");
       return;
     }
     let output = Command::new("pnpm")
@@ -118,24 +107,21 @@ impl Pnpm {
       .expect("Failed to execute pnpm list");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value =
-      serde_json::from_str(&stdout).expect("Failed to parse pnpm list output");
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("Failed to parse pnpm list output");
 
     for project in json.as_array().unwrap_or(&vec![]) {
       let name = project["name"].as_str().unwrap_or("").to_string();
       let path = project["path"].as_str().unwrap_or("").to_string();
-      let project_package_json =
-        fs::read_to_string(Path::new(&path).join("package.json"))
-          .await
-          .expect("Failed to read project package.json");
-      let scripts =
-        serde_json::from_str::<serde_json::Value>(&project_package_json)
-          .expect("Failed to parse project package.json")["scripts"]
-          .as_object()
-          .unwrap_or(&serde_json::Map::new())
-          .keys()
-          .cloned()
-          .collect::<Vec<String>>();
+      let project_package_json = fs::read_to_string(Path::new(&path).join("package.json"))
+        .await
+        .expect("Failed to read project package.json");
+      let scripts = serde_json::from_str::<serde_json::Value>(&project_package_json)
+        .expect("Failed to parse project package.json")["scripts"]
+        .as_object()
+        .unwrap_or(&serde_json::Map::new())
+        .keys()
+        .cloned()
+        .collect::<Vec<String>>();
       let mut deps = vec![];
       self.add_deps(project, "dependencies", &mut deps);
       self.add_deps(project, "devDependencies", &mut deps);
@@ -155,50 +141,30 @@ impl Pnpm {
 
     if counter == 0 {
       // Cache the loaded projects
-      let projects_vec: Vec<Project> =
-        self._projects.values().cloned().collect();
-      let cache_path =
-        PathBuf::from("node_modules")
-          .join(".plexus")
-          .join(hash_vec_strings(
-            [
-              projects.to_vec(),
-              vec![get_file_sha256("pnpm-lock.yaml").unwrap_or_default()],
-            ]
-            .concat(),
-          ));
+      let projects_vec: Vec<Project> = self._projects.values().cloned().collect();
+      let cache_path = PathBuf::from("node_modules").join(".plexus").join(hash_vec_strings(
+        [
+          projects.to_vec(),
+          vec![get_file_sha256("pnpm-lock.yaml").unwrap_or_default()],
+        ]
+        .concat(),
+      ));
       if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent)
           .await
           .expect("Failed to create cache directory");
       }
-      match fs::write(
-        &cache_path,
-        serde_json::to_string(&projects_vec).unwrap(),
-      )
-      .await
-      {
+      match fs::write(&cache_path, serde_json::to_string(&projects_vec).unwrap()).await {
         Ok(_) => debug!("Cached pnpm projects to {}", cache_path.display()),
         Err(e) => eprintln!("Error writing cache file: {}", e),
       }
     }
   }
 
-  fn add_deps(
-    &mut self,
-    json: &serde_json::Value,
-    dep_name: &str,
-    deps: &mut Vec<String>,
-  ) {
-    for dep in json[dep_name]
-      .as_object()
-      .unwrap_or(&serde_json::Map::new())
-      .values()
-    {
+  fn add_deps(&mut self, json: &serde_json::Value, dep_name: &str, deps: &mut Vec<String>) {
+    for dep in json[dep_name].as_object().unwrap_or(&serde_json::Map::new()).values() {
       let dep_version = dep["version"].as_str().unwrap_or("").to_string();
-      if !dep_version.starts_with("link:")
-        || dep_version.contains("node_modules")
-      {
+      if !dep_version.starts_with("link:") || dep_version.contains("node_modules") {
         continue;
       }
 

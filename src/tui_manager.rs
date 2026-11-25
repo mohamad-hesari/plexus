@@ -2,9 +2,7 @@ use crossterm::event::MouseEventKind;
 use futures::StreamExt;
 use ratatui::{
   DefaultTerminal,
-  crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, EventStream, KeyCode,
-  },
+  crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, EventStream, KeyCode},
   crossterm::execute,
   prelude::*,
   symbols::scrollbar,
@@ -64,18 +62,12 @@ struct LogVisitor {
 
 impl LogVisitor {
   fn new() -> Self {
-    Self {
-      message: String::new(),
-    }
+    Self { message: String::new() }
   }
 }
 
 impl Visit for LogVisitor {
-  fn record_debug(
-    &mut self,
-    field: &tracing::field::Field,
-    value: &dyn std::fmt::Debug,
-  ) {
+  fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
     if field.name() == "message" {
       self.message = format!("{:?}", value);
     }
@@ -95,63 +87,77 @@ impl TuiManager for App {
     color_eyre::install().unwrap();
     let terminal = Arc::new(Mutex::new(ratatui::init()));
     let pure_tasks = Arc::new(state.get_tasks().await);
-    self.state
-            .spawn(async move {
-                let ui_state = Arc::new(RwLock::new(TuiState {
-                    selected: 0,
-                    box_selected: BoxSelected::Tasks,
-                    frame_count: 0,
-                    show_log: false,
-                    total_tasks: 0,
-                    log_entry: LogView::new(false),
-                    output_entry: LogView::new(true),
-                    tasks: vec![],
-                }));
+    self
+      .state
+      .spawn(async move {
+        let ui_state = Arc::new(RwLock::new(TuiState {
+          selected: 0,
+          box_selected: BoxSelected::Tasks,
+          frame_count: 0,
+          show_log: false,
+          total_tasks: 0,
+          log_entry: LogView::new(false),
+          output_entry: LogView::new(true),
+          tasks: vec![],
+        }));
 
-                let mut t = terminal.lock().await;
-                render(&mut t, Arc::clone(&ui_state), Arc::clone(&state), Arc::clone(&pure_tasks)).await;
-                drop(t);
+        let mut t = terminal.lock().await;
+        render(
+          &mut t,
+          Arc::clone(&ui_state),
+          Arc::clone(&state),
+          Arc::clone(&pure_tasks),
+        )
+        .await;
+        drop(t);
 
-                let mut rx_status_change = state.get_status_change_receiver();
-                let mut reader = EventStream::new();
-                let terminal_clone = Arc::clone(&terminal);
-                let ui_state_clone = Arc::clone(&ui_state);
-                let state_clone = Arc::clone(&state);
-                let pure_tasks_clone = Arc::clone(&pure_tasks);
+        let mut rx_status_change = state.get_status_change_receiver();
+        let mut reader = EventStream::new();
+        let terminal_clone = Arc::clone(&terminal);
+        let ui_state_clone = Arc::clone(&ui_state);
+        let state_clone = Arc::clone(&state);
+        let pure_tasks_clone = Arc::clone(&pure_tasks);
 
-                loop {
-                    if !state_clone.is_running() {
-                        debug!("TUI initialization detected app is no longer running, exiting...");
-                        break;
-                    }
+        loop {
+          if !state_clone.is_running() {
+            debug!("TUI initialization detected app is no longer running, exiting...");
+            break;
+          }
 
-                    let mut t = terminal_clone.lock().await;
-                    render(&mut t, Arc::clone(&ui_state_clone), Arc::clone(&state_clone), Arc::clone(&pure_tasks_clone)).await;
-                    drop(t);
+          let mut t = terminal_clone.lock().await;
+          render(
+            &mut t,
+            Arc::clone(&ui_state_clone),
+            Arc::clone(&state_clone),
+            Arc::clone(&pure_tasks_clone),
+          )
+          .await;
+          drop(t);
 
-                    tokio::select! {
-                        _ = rx_status_change.changed() => {
-                            rx_status_change.borrow_and_update();
-                            trace!("Received initial task status change event during TUI setup, marking TUI as dirty...");
-                        }
-                        maybe_event = reader.next() => {
-                            if let Some(Ok(event::Event::Key(key_event))) = maybe_event {
-                                let _ = handle_key_event(key_event, Arc::clone(&ui_state)).await;
-                            } else if let Some(Ok(event::Event::Mouse(mouse))) = maybe_event {
-                                handle_mouse_event(mouse, Arc::clone(&ui_state)).await;
-                            } else if let Some(Ok(event::Event::Resize(width, height))) = maybe_event {
-                                debug!("Terminal resized to {}x{}", width, height);
-                            }
-                        }
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
-                            tokio::task::yield_now().await; // Yield to allow other tasks to run
-                        }
-                    }
-                }
+          tokio::select! {
+              _ = rx_status_change.changed() => {
+                  rx_status_change.borrow_and_update();
+                  trace!("Received initial task status change event during TUI setup, marking TUI as dirty...");
+              }
+              maybe_event = reader.next() => {
+                  if let Some(Ok(event::Event::Key(key_event))) = maybe_event {
+                      let _ = handle_key_event(key_event, Arc::clone(&ui_state)).await;
+                  } else if let Some(Ok(event::Event::Mouse(mouse))) = maybe_event {
+                      handle_mouse_event(mouse, Arc::clone(&ui_state)).await;
+                  } else if let Some(Ok(event::Event::Resize(width, height))) = maybe_event {
+                      debug!("Terminal resized to {}x{}", width, height);
+                  }
+              }
+              _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                  tokio::task::yield_now().await; // Yield to allow other tasks to run
+              }
+          }
+        }
 
-                ratatui::restore();
-                execute!(stdout, DisableMouseCapture).unwrap();
-            }).await;
+        ratatui::restore();
+        execute!(stdout, DisableMouseCapture).unwrap();
+      })
+      .await;
   }
 }
 
@@ -169,11 +175,9 @@ async fn render(
   let logs = state.get_logs().await;
   let mut ui_state_lock = ui_state.write().await;
   ui_state_lock.log_entry.clear();
-  logs.iter().for_each(|(level, line)| {
-    ui_state_lock
-      .log_entry
-      .add_log(format!("[{}] {}", level, line))
-  });
+  logs
+    .iter()
+    .for_each(|(level, line)| ui_state_lock.log_entry.add_log(format!("[{}] {}", level, line)));
   ui_state_lock.output_entry.clear();
   let task_name = &pure_tasks[ui_state_lock.selected];
   let task_state = state.get_task_state(task_name).await;
@@ -200,9 +204,7 @@ async fn render(
   }
 }
 
-fn render_ui(
-  state: &mut TuiState,
-) -> impl FnOnce(&mut Frame) -> io::Result<()> {
+fn render_ui(state: &mut TuiState) -> impl FnOnce(&mut Frame) -> io::Result<()> {
   move |frame| {
     let area = frame.area();
     let [(top_height, bottom_height), _] = if state.show_log {
@@ -215,11 +217,7 @@ fn render_ui(
       Constraint::Percentage(bottom_height),
     ])
     .areas(area);
-    let [left, right] = Layout::horizontal([
-      Constraint::Percentage(35),
-      Constraint::Percentage(65),
-    ])
-    .areas(top);
+    let [left, right] = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).areas(top);
 
     if state.show_log {
       draw_logs(
@@ -267,8 +265,7 @@ fn render_ui(
       .collect();
 
     let task_selected = state.box_selected == BoxSelected::Tasks;
-    let list =
-      List::new(items).highlight_style(Style::default().fg(Color::Yellow));
+    let list = List::new(items).highlight_style(Style::default().fg(Color::Yellow));
 
     let tasks_block = Block::default()
       .borders(Borders::ALL)
@@ -288,8 +285,7 @@ fn render_ui(
     frame.render_widget(tasks_block, left);
 
     let [tasks_list_area, help_area] =
-      Layout::vertical([Constraint::Min(0), Constraint::Length(9)])
-        .areas(tasks_block_area);
+      Layout::vertical([Constraint::Min(0), Constraint::Length(9)]).areas(tasks_block_area);
 
     frame.render_widget(list, tasks_list_area);
     let help_text = [
@@ -306,8 +302,7 @@ fn render_ui(
     .iter()
     .map(|s| ratatui::text::Line::from(*s))
     .collect::<Vec<_>>();
-    let help_paragraph = Paragraph::new(Text::from(help_text))
-      .style(Style::default().fg(Color::White).rapid_blink());
+    let help_paragraph = Paragraph::new(Text::from(help_text)).style(Style::default().fg(Color::White).rapid_blink());
     frame.render_widget(help_paragraph, help_area);
 
     let output_title = if state.tasks.is_empty() {
@@ -315,11 +310,7 @@ fn render_ui(
     } else {
       format!(
         "Output - {}",
-        state
-          .tasks
-          .get(state.selected)
-          .map(|t| t.name())
-          .unwrap_or_default()
+        state.tasks.get(state.selected).map(|t| t.name()).unwrap_or_default()
       )
     };
     draw_logs(
@@ -333,13 +324,7 @@ fn render_ui(
   }
 }
 
-fn draw_logs(
-  f: &mut Frame,
-  app: &mut LogView,
-  area: Rect,
-  title: &str,
-  selected: bool,
-) {
+fn draw_logs(f: &mut Frame, app: &mut LogView, area: Rect, title: &str, selected: bool) {
   // Correct viewport: subtract block borders ONLY
   let viewport_height = area.height.saturating_sub(2);
   app.set_viewport_height(viewport_height);
@@ -372,11 +357,7 @@ fn draw_logs(
     .block(
       Block::default()
         .borders(Borders::ALL)
-        .border_type(if selected {
-          BorderType::Thick
-        } else {
-          BorderType::Plain
-        })
+        .border_type(if selected { BorderType::Thick } else { BorderType::Plain })
         .style(if selected {
           Style::default().fg(Color::Yellow)
         } else {
@@ -390,8 +371,7 @@ fn draw_logs(
 
   f.render_widget(paragraph, area);
 
-  let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-    .symbols(scrollbar::VERTICAL);
+  let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight).symbols(scrollbar::VERTICAL);
 
   f.render_stateful_widget(scrollbar, area, app.scrollbar_state());
 }
@@ -414,10 +394,7 @@ struct TuiState {
   frame_count: usize,
 }
 
-async fn handle_mouse_event(
-  mouse: event::MouseEvent,
-  state: Arc<RwLock<TuiState>>,
-) {
+async fn handle_mouse_event(mouse: event::MouseEvent, state: Arc<RwLock<TuiState>>) {
   trace!("Handling mouse event: {:?}", mouse);
   let mut state = state.write().await;
   match mouse.kind {
@@ -448,10 +425,7 @@ async fn handle_mouse_event(
   drop(state);
 }
 
-async fn handle_key_event(
-  key_event: event::KeyEvent,
-  state: Arc<RwLock<TuiState>>,
-) -> bool {
+async fn handle_key_event(key_event: event::KeyEvent, state: Arc<RwLock<TuiState>>) -> bool {
   debug!("Handling key event: {:?}", key_event);
   match key_event.code {
     KeyCode::Char('q') => {
@@ -494,10 +468,7 @@ async fn handle_key_event(
       let (name, status) = {
         let state = state.read().await;
         let selected_task = &state.tasks[state.selected];
-        let result = (
-          selected_task.name().to_string(),
-          selected_task.status().clone(),
-        );
+        let result = (selected_task.name().to_string(), selected_task.status().clone());
         drop(state);
         result
       };
@@ -549,11 +520,7 @@ async fn handle_key_event(
       drop(state);
       true
     }
-    KeyCode::PageDown
-    | KeyCode::PageUp
-    | KeyCode::End
-    | KeyCode::Home
-    | KeyCode::Char('f') => {
+    KeyCode::PageDown | KeyCode::PageUp | KeyCode::End | KeyCode::Home | KeyCode::Char('f') => {
       info!("Handling scroll-related key event: {:?}", key_event.code);
       let mut state = state.write().await;
       let entry = if state.box_selected == BoxSelected::Logs {

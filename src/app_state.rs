@@ -55,17 +55,9 @@ impl TaskState {
 }
 
 pub enum StateEvent {
-  Output {
-    task_name: String,
-    output: String,
-  },
-  Status {
-    task_name: String,
-    status: TaskStatus,
-  },
-  FileChanged {
-    task_name: String,
-  },
+  Output { task_name: String, output: String },
+  Status { task_name: String, status: TaskStatus },
+  FileChanged { task_name: String },
   Quit,
   Failed,
 }
@@ -117,15 +109,11 @@ impl AppState {
     }
   }
 
-  pub fn get_status_change_receiver(
-    &self,
-  ) -> watch::Receiver<Option<StatusChangeEvent>> {
+  pub fn get_status_change_receiver(&self) -> watch::Receiver<Option<StatusChangeEvent>> {
     self._status_change.1.clone()
   }
 
-  pub fn get_status_change_sender(
-    &self,
-  ) -> watch::Sender<Option<StatusChangeEvent>> {
+  pub fn get_status_change_sender(&self) -> watch::Sender<Option<StatusChangeEvent>> {
     self._status_change.0.clone()
   }
 
@@ -139,12 +127,8 @@ impl AppState {
     let mut lock = self._state.write().await;
     for (task, depend_on) in tasks {
       lock._statuses.insert(task.clone(), TaskStatus::Initialized);
-      lock
-        ._outputs
-        .insert(task.clone(), Arc::new(RwLock::new(vec![])));
-      lock
-        ._tasks_depend_on
-        .insert(task.clone(), depend_on.clone());
+      lock._outputs.insert(task.clone(), Arc::new(RwLock::new(vec![])));
+      lock._tasks_depend_on.insert(task.clone(), depend_on.clone());
     }
   }
 
@@ -190,14 +174,8 @@ impl AppState {
           let mut outputs = outputs.write().await;
           outputs.push(output);
         }
-        self
-          ._status_changed
-          .store(true, std::sync::atomic::Ordering::SeqCst);
-        self
-          ._status_change
-          .0
-          .send(None)
-          .expect("Failed to send status change");
+        self._status_changed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self._status_change.0.send(None).expect("Failed to send status change");
       }
       StateEvent::Status { task_name, status } => {
         info!("Task {} status changed to {:?}", task_name, status);
@@ -208,9 +186,7 @@ impl AppState {
           let mut outputs = outputs.write().await;
           outputs.push(format!("Status changed to {:?}", status));
         }
-        self
-          ._status_changed
-          .store(true, std::sync::atomic::Ordering::SeqCst);
+        self._status_changed.store(true, std::sync::atomic::Ordering::SeqCst);
         self
           ._status_change
           .0
@@ -219,9 +195,7 @@ impl AppState {
       }
       StateEvent::Failed => {
         info!("A task failed, quitting application");
-        self
-          ._running
-          .store(false, std::sync::atomic::Ordering::Relaxed);
+        self._running.store(false, std::sync::atomic::Ordering::Relaxed);
         let _ = self._sender.send(QuitEvent::Failed);
         self
           ._status_change
@@ -231,9 +205,7 @@ impl AppState {
       }
       StateEvent::Quit => {
         info!("Quitting application");
-        self
-          ._running
-          .store(false, std::sync::atomic::Ordering::Relaxed);
+        self._running.store(false, std::sync::atomic::Ordering::Relaxed);
         let _ = self._sender.send(QuitEvent::Normal);
         self
           ._status_change
@@ -261,18 +233,12 @@ impl AppState {
         };
         debug!("Tasks to restart: {:?}", tasks);
         let mut state = self._state.write().await;
-        static NEED_RESTARTS: [TaskStatus; 3] = [
-          TaskStatus::Finished,
-          TaskStatus::Failed,
-          TaskStatus::Initialized,
-        ];
+        static NEED_RESTARTS: [TaskStatus; 3] = [TaskStatus::Finished, TaskStatus::Failed, TaskStatus::Initialized];
         for task in tasks {
           if let Some(status) = state._statuses.get(&task)
             && NEED_RESTARTS.contains(status)
           {
-            state
-              ._statuses
-              .insert(task.clone(), TaskStatus::Initialized);
+            state._statuses.insert(task.clone(), TaskStatus::Initialized);
             debug!("Restarting task: {}", task);
           }
         }
@@ -286,14 +252,10 @@ impl AppState {
   }
 
   pub async fn is_status_changed(&self, rest: bool) -> bool {
-    let status_change = self
-      ._status_changed
-      .load(std::sync::atomic::Ordering::SeqCst);
+    let status_change = self._status_changed.load(std::sync::atomic::Ordering::SeqCst);
     if status_change {
       if rest {
-        self
-          ._status_changed
-          .store(false, std::sync::atomic::Ordering::SeqCst);
+        self._status_changed.store(false, std::sync::atomic::Ordering::SeqCst);
       }
       true
     } else {
@@ -344,9 +306,7 @@ impl AppState {
   pub async fn wait_for_all(&self) -> bool {
     self
       .spawn(async {
-        tokio::signal::ctrl_c()
-          .await
-          .expect("Failed to listen for Ctrl+C");
+        tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
         emit!(StateEvent::Quit);
       })
       .await;
@@ -364,10 +324,7 @@ impl AppState {
 
       // 2. If the value is false, we exit normally (Success)
       if current_value != QuitEvent::None {
-        info!(
-          "Received stop signal ({:?}). Exiting normally...",
-          current_value
-        );
+        info!("Received stop signal ({:?}). Exiting normally...", current_value);
         failed = current_value == QuitEvent::Failed;
         break;
       }

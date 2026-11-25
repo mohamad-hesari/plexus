@@ -7,10 +7,7 @@ use clap::Parser;
 use globset::GlobSet;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::{
-  app_state::AppState, cli::Cli, pnpm::Pnpm, task_manager::TaskManager,
-  watch_manager::WatchManager,
-};
+use crate::{app_state::AppState, cli::Cli, pnpm::Pnpm, task_manager::TaskManager, watch_manager::WatchManager};
 
 pub struct AppTask {
   pub name: String,

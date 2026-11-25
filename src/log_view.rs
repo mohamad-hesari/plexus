@@ -20,9 +20,7 @@ impl LogView {
   }
 
   pub fn logs(&self) -> Vec<String> {
-    self.logs
-      [self.scroll..(self.scroll + self.viewport_height).min(self.logs.len())]
-      .to_vec()
+    self.logs[self.scroll..(self.scroll + self.viewport_height).min(self.logs.len())].to_vec()
   }
 
   pub fn new(debug: bool) -> Self {

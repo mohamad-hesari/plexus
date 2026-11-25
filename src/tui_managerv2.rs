@@ -583,7 +583,10 @@ impl TuiManager {
         Style::default().add_modifier(Modifier::BOLD),
       )];
       if cmds.is_empty() {
-        spans.push(Span::styled("(no commands)", Style::default().add_modifier(Modifier::DIM)));
+        spans.push(Span::styled(
+          "(no commands)",
+          Style::default().add_modifier(Modifier::DIM),
+        ));
       }
       for (idx, cmd) in cmds.iter().enumerate() {
         let (color, glyph) = status_glyph(&cmd._status, frame_count);
@@ -1060,7 +1063,10 @@ impl TuiManager {
         let up = mouse_event.kind == MouseEventKind::ScrollUp;
         match state.focus() {
           Focus::Logs => {
-            let Some(task) = tasks.iter().find(|t| Some(&t._id) == state.logs.as_ref().map(|w| &w.task_id)) else {
+            let Some(task) = tasks
+              .iter()
+              .find(|t| Some(&t._id) == state.logs.as_ref().map(|w| &w.task_id))
+            else {
               return;
             };
             let Some(cmd) = tab_command(task, state.logs.as_ref().map_or(0, |w| w.tab)) else {
@@ -1124,9 +1130,15 @@ impl TuiManager {
       return;
     };
     let cmds = sorted_commands(&task._commands);
-    let tab = state.logs.as_ref().map_or(0, |w| w.tab).min(cmds.len().saturating_sub(1));
+    let tab = state
+      .logs
+      .as_ref()
+      .map_or(0, |w| w.tab)
+      .min(cmds.len().saturating_sub(1));
     let task_id = task._id.clone();
-    let current = cmds.get(tab).map(|c| (c._id.clone(), c._command.to_string(), c._status.clone()));
+    let current = cmds
+      .get(tab)
+      .map(|c| (c._id.clone(), c._command.to_string(), c._status.clone()));
 
     // Tab switching and the per-command actions do not touch the pane, so handle them
     // before borrowing one.
