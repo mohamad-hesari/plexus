@@ -43,6 +43,8 @@ nothing, `"not running"` from `stop`, or `"blocked: dependency @acme/ui failed"`
 {"type":"stopped","count":1}
 ```
 
+`restart-all` replies `{"type":"restarting","count":7}` and returns without waiting.
+
 `pid` is present with `--detach` only.
 
 ## Errors

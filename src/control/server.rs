@@ -264,6 +264,10 @@ impl ControlServer {
         }
         Err(e) => error(&mut w, e).await,
       },
+      Request::RestartAll => {
+        let count = self.tm.restart_all().await;
+        write_line(&mut w, &Reply::Restarting { count }).await
+      }
       Request::Connect { target, port } => self.connect(r, w, &target, port).await,
       Request::RegisterForward { target, port, listen } => self.register_forward(r, w, &target, port, listen).await,
       Request::ListForwards => {

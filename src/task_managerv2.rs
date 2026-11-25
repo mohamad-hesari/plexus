@@ -174,6 +174,23 @@ impl TaskManager {
     self.start_command(task_id, command_id, force).await;
   }
 
+  /// Restarts every loaded command in parallel, in the background. Returns how many.
+  pub async fn restart_all(self: &Arc<Self>) -> usize {
+    let mut sets = JoinSet::new();
+    for task in self._store.get_all_tasks().await {
+      for cmd_id in task._commands.into_keys() {
+        let task_id = task._id.clone();
+        let tm = Arc::clone(self);
+        sets.spawn(async move {
+          tm.restart_command(&task_id, &cmd_id, false).await;
+        });
+      }
+    }
+    let count = sets.len();
+    tokio::spawn(sets.join_all());
+    count
+  }
+
   pub fn get_store(&self) -> Arc<TaskStore> {
     Arc::clone(&self._store)
   }

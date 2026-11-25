@@ -18,7 +18,7 @@ use std::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
   },
 };
-use tokio::{sync::RwLock, task::JoinSet};
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use unicode_width::UnicodeWidthChar;
 
@@ -1261,20 +1261,8 @@ impl TuiManager {
       KeyCode::Char('R') => {
         self._state.write().await.last_key_log = Some("Restarting every task".to_string());
         let tm = Arc::clone(&self._task_manager);
-        // Restarting everything can take seconds per command; keep it off the render loop.
         tokio::spawn(async move {
-          let mut sets = JoinSet::new();
-          for task in tasks.iter() {
-            for cmd in task._commands.values() {
-              let task_id = task._id.clone();
-              let cmd_id = cmd._id.clone();
-              let tm = Arc::clone(&tm);
-              sets.spawn(async move {
-                tm.restart_command(&task_id, &cmd_id, false).await;
-              });
-            }
-          }
-          sets.join_all().await;
+          tm.restart_all().await;
         });
       }
       KeyCode::Char('r') => {

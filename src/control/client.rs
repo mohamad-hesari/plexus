@@ -306,6 +306,12 @@ async fn drain(mut r: Reader, json: bool, ok: impl Fn(&CommandResult) -> bool) -
         }
         return Ok(0);
       }
+      Reply::Restarting { count } => {
+        if !json {
+          println!("restarting {} command{}", count, if count == 1 { "" } else { "s" });
+        }
+        return Ok(0);
+      }
       Reply::Stopped { count } => {
         if !json {
           println!("stopped {} forward{}", count, if count == 1 { "" } else { "s" });
@@ -573,6 +579,10 @@ pub async fn run(args: ClientArgs) -> i32 {
     ClientAction::Restart { target, no_wait } => match open(&ep, Request::Restart { target, wait: !no_wait }).await {
       Ok((r, _w)) if no_wait => drain(r, json, |_| true).await,
       Ok((r, _w)) => drain(r, json, succeeded).await,
+      Err(f) => Err(f),
+    },
+    ClientAction::RestartAll => match open(&ep, Request::RestartAll).await {
+      Ok((r, _w)) => drain(r, json, |_| true).await,
       Err(f) => Err(f),
     },
     ClientAction::Stop { target } => match open(&ep, Request::Stop { target }).await {

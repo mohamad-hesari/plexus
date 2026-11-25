@@ -37,6 +37,7 @@ pub enum Request {
     target: String,
     wait: bool,
   },
+  RestartAll,
   Connect {
     target: String,
     port: u16,
@@ -73,6 +74,7 @@ pub enum Reply {
   Forwards { forwards: Vec<ForwardInfo> },
   StopForward,
   Stopped { count: usize },
+  Restarting { count: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

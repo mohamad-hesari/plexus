@@ -347,6 +347,8 @@ pub enum ClientAction {
     #[arg(long, help = "Return right after triggering (use for long-lived commands like dev)")]
     no_wait: bool,
   },
+  /// Restart every loaded command, like Shift+R in the TUI. Returns at once.
+  RestartAll,
   /// Listening TCP ports discovered under each command's process tree.
   Ports { target: Option<String> },
   /// Listen locally and relay every connection to PORT of PACKAGE through plexus.

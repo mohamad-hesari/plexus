@@ -43,6 +43,15 @@ A script waits until the same script has succeeded in every package it depends o
 them failed, `restart` exits 1 with `blocked: dependency <pkg> failed`. Fix and restart that
 package's script first.
 
+To restart everything plexus loaded, like Shift+R in its TUI:
+
+```bash
+{{plexus}} client restart-all
+```
+
+It returns at once with exit 0. Plexus stops what is running and starts every script again in
+dependency order, so follow up with `status` or `logs` (or `start <target>` to wait for one).
+
 ## Long-lived scripts (dev servers)
 
 `dev`, `start`, `serve` and other watch-style scripts never finish, so never wait on them:
